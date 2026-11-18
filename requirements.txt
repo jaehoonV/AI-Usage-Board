@@ -1,0 +1,4 @@
+# 실행에 필요한 외부 패키지는 없다. Codex는 공식 CLI를, Claude와 Gemini는
+# 전용 Chrome/Edge 프로필(+ 직접 구현한 CDP 클라이언트)을, Antigravity는 IDE가
+# 띄워 둔 로컬 language server를 쓴다.
+# 개발용: py -m pip install pytest pyinstaller

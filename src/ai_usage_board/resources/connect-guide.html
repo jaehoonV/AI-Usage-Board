@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Usage Board 연결 안내</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --canvas: #ffffff;
+    --surface: #ffffff;
+    --border: #e4e7ec;
+    --text: #111827;
+    --muted: #616b7a;
+    --faint: #9aa3b0;
+    --accent: #2563eb;
+    --codex: #10a37f;
+    --claude: #d97757;
+    --gemini: #4285f4;
+    --antigravity: #7b61ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #15171c; --surface: #1c1f26; --border: #2c313a;
+      --text: #e9ecf1; --muted: #9ba4b2; --faint: #6e7785; --accent: #6aa2ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 48px 16px 80px;
+    background: var(--canvas); color: var(--text);
+    font: 14px/1.7 "Segoe UI Variable Display", "Segoe UI", "맑은 고딕", system-ui, sans-serif;
+  }
+  main { max-width: 680px; margin: 0 auto; }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .mark { display: flex; align-items: flex-end; gap: 2px; height: 18px; }
+  .mark i { display: block; width: 4px; border-radius: 1px; }
+  .mark i:nth-child(1) { height: 11px; background: var(--accent); }
+  .mark i:nth-child(2) { height: 18px; background: var(--muted); }
+  .mark i:nth-child(3) { height: 7px;  background: var(--faint); }
+  h1 { font-size: 19px; margin: 0; letter-spacing: -.01em; }
+  .lede { color: var(--muted); margin: 0 0 36px; }
+  section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 22px; margin-bottom: 14px;
+  }
+  h2 { font-size: 14px; margin: 0 0 12px; display: flex; align-items: center; gap: 9px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  ol, ul { margin: 0; padding-left: 20px; }
+  li { margin: 5px 0; }
+  li::marker { color: var(--faint); }
+  code {
+    font: 12px/1.5 "Cascadia Mono", Consolas, monospace;
+    background: rgba(127,127,127,.12); padding: 2px 6px; border-radius: 5px;
+    word-break: break-all;
+  }
+  .meta { color: var(--faint); font-size: 12px; margin-top: 10px; }
+  footer { color: var(--faint); font-size: 12px; margin-top: 28px; text-align: center; }
+  .grid { display: grid; gap: 4px 14px; grid-template-columns: max-content 1fr; font-size: 13px; }
+  .grid dt { color: var(--muted); }
+  .grid dd { margin: 0; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <span class="mark"><i></i><i></i><i></i></span>
+    <h1>AI Usage Board 연결 안내</h1>
+  </div>
+  <p class="lede">카드마다 연결 방법이 다릅니다. 한 번 연결해 두면 위젯을 다시 켜도 그대로 이어집니다.</p>
+
+  <section>
+    <h2><span class="dot" style="background:var(--codex)"></span>Codex</h2>
+    <ol>
+      <li>Codex 앱이나 <code>npm i -g @openai/codex</code>로 설치한 CLI 중 하나만 있으면 됩니다.</li>
+      <li>Codex에 이미 로그인해 두었다면 따로 할 일이 없습니다. 카드에 바로 숫자가 나옵니다.</li>
+      <li>카드에 <strong>계정 연결</strong>이 보이면 누르세요. Codex가 쓰는 OpenAI 로그인 페이지가 기본 브라우저에 열립니다.</li>
+    </ol>
+    <p class="meta">로그인 정보는 Codex가 직접 관리합니다. 위젯은 Codex에게 남은 한도만 물어봅니다.</p>
+  </section>
+
+  <section>
+    <h2><span class="dot" style="background:var(--claude)"></span>Claude · Gemini</h2>
+    <ol>
+      <li>카드의 <strong>계정 연결</strong>을 누르면 Chrome(없으면 Edge) 창이 하나 뜹니다. 평소 브라우저와 섞이지 않는 위젯 전용 프로필입니다.</li>
+      <li>그 창에서 평소처럼 로그인하세요.</li>
+      <li>카드로 돌아와 <strong>로그인 완료</strong>를 누르면 창이 닫히고, 이후로는 보이지 않는 곳에서 사용량 화면만 읽습니다.</li>
+      <li>카드에 <strong>창 열기</strong>가 뜨면 사이트가 사람인지 확인하는 중입니다. 눌러서 확인을 마쳐 주세요.</li>
+    </ol>
+    <p class="meta">사용량 화면의 막대와 초기화 시각만 읽습니다. 대화 내용, 계정 정보, 쿠키는 읽지 않습니다.
+      다른 계정으로 바꾸려면 트레이 메뉴의 <strong>Claude 연결 초기화</strong> / <strong>Gemini 연결 초기화</strong>를 쓰세요.</p>
+  </section>
+
+  <section>
+    <h2><span class="dot" style="background:var(--antigravity)"></span>Antigravity</h2>
+    <ol>
+      <li>할 일이 없습니다. Antigravity에 로그인해 둔 PC라면 카드가 알아서 채워집니다.</li>
+      <li>앱이 켜져 있으면 1분마다, 꺼져 있으면 10분마다 모델별 남은 할당량을 확인합니다.</li>
+    </ol>
+    <p class="meta">플랜 이름과 모델별 할당량만 가져옵니다. 프로젝트나 대화는 건드리지 않습니다.</p>
+  </section>
+
+  <section>
+    <h2>얼마나 자주, 어디에</h2>
+    <dl class="grid">
+      <dt>Codex</dt><dd>15초마다</dd>
+      <dt>Claude · Gemini</dt><dd>15초마다 읽고, 페이지는 1분마다 새로 고침</dd>
+      <dt>Antigravity</dt><dd>1분마다 (앱이 꺼져 있으면 10분마다)</dd>
+      <dt>설정 · 캐시 · 로그</dt><dd><code>{{DATA_FOLDER}}</code></dd>
+    </dl>
+    <p class="meta">
+      위젯이 저장하는 것은 모두 위 폴더 안에 있고, 이 PC 밖으로 보내는 것은 없습니다.
+      완전히 지우려면 위젯을 종료한 뒤 이 폴더를 통째로 삭제하면 됩니다.
+    </p>
+  </section>
+
+  <section>
+    <h2>화면 읽는 법</h2>
+    <ul>
+      <li>숫자는 <strong>이미 쓴 비율</strong>입니다. 서비스가 토큰 수 대신 비율만 알려 주기 때문입니다.</li>
+      <li>65% 이상이면 주황, 90% 이상이면 빨강입니다. 10분 넘게 새 값을 못 받으면 회색으로 바뀝니다.</li>
+      <li>창의 <code>✕</code>는 트레이로 숨기기입니다. 끄려면 왼쪽 아래 설정 메뉴나 트레이 메뉴의 <strong>종료</strong>를 누르세요.</li>
+      <li>설정 메뉴에서 작업 표시줄 위에 한 줄짜리 막대를 따로 켤 수 있습니다.</li>
+    </ul>
+  </section>
+
+  <footer>AI Usage Board</footer>
+</main>
+</body>
+</html>
