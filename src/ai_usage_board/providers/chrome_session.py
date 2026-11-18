@@ -231,6 +231,30 @@ class BrowserSession:
             creationflags=NO_WINDOW,
         )
 
+        try:
+            self._await_ready(port_file, debug)
+        except BrowserError:
+            # The caller never gets a session for a browser that failed to
+            # start, so nothing else would ever close it. Left running, it
+            # sits there with an open DevTools port and no owner.
+            self._abandon()
+            raise
+
+    def _abandon(self) -> None:
+        """Stop a browser that never became usable. No goodbye: there is
+        no DevTools connection to say it over."""
+        process = self.process
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=3)
+
+    def _await_ready(self, port_file: Path, debug: bool) -> None:
         if not debug:
             # Nothing to wait for: no port is published. Just confirm it lives.
             time.sleep(1.0)

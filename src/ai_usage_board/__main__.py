@@ -8,11 +8,10 @@ import os
 import sys
 import threading
 import time
-import traceback
 from typing import List, Optional
 
 from . import APP_NAME, BRIDGE_PORT
-from .config import CACHE_FILE, LOG_FILE, ensure_dirs, prepare_user_files, single_instance
+from .config import CACHE_FILE, LOG_FILE, ensure_dirs, log_exception, prepare_user_files, single_instance
 
 
 def _parse(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -31,12 +30,6 @@ def _alert(message: str) -> None:
             ctypes.windll.user32.MessageBoxW(None, message, APP_NAME, 0x40)
     else:
         print(message, file=sys.stderr)
-
-
-def _rotate_log() -> None:
-    with contextlib.suppress(OSError):
-        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 256 * 1024:
-            LOG_FILE.replace(LOG_FILE.with_suffix(".previous.log"))
 
 
 # ----------------------------------------------------------------------
@@ -68,11 +61,7 @@ def _run_account_window(provider: str, hidden: bool) -> int:
         )
     except Exception:  # noqa: BLE001 - never pop a traceback at the user
         report("engine_error", "HelperCrashed")
-        _rotate_log()
-        with contextlib.suppress(OSError):
-            with LOG_FILE.open("a", encoding="utf-8") as stream:
-                stream.write(f"\n--- {provider} helper ---\n")
-                traceback.print_exc(file=stream)
+        log_exception(f"{provider} helper")
         return 1
     return 0
 
@@ -211,10 +200,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 0
             return _run_widget()
     except Exception:  # noqa: BLE001
-        _rotate_log()
-        with contextlib.suppress(OSError):
-            with LOG_FILE.open("a", encoding="utf-8") as stream:
-                traceback.print_exc(file=stream)
+        log_exception()
         _alert(f"앱을 시작하지 못했습니다.\n오류 기록: {LOG_FILE}")
         return 1
 

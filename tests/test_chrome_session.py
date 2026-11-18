@@ -35,6 +35,42 @@ def test_sign_in_window_stays_an_ordinary_browser():
     assert "IntensiveWakeUpThrottling" not in features(command)
 
 
+class FakeProcess:
+    pid = 4242
+
+    def __init__(self):
+        self.running = True
+        self.terminated = False
+
+    def poll(self):
+        return None if self.running else 0
+
+    def terminate(self):
+        self.terminated = True
+        self.running = False
+
+    def kill(self):
+        self.running = False
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def test_a_browser_that_never_got_ready_is_not_left_running(tmp_path, monkeypatch):
+    process = FakeProcess()
+    monkeypatch.setattr(chrome_session, "find_browser", lambda: Path("chrome.exe"))
+    monkeypatch.setattr(chrome_session.subprocess, "Popen", lambda *_a, **_k: process)
+
+    def never_ready(self, _port_file, _debug):
+        raise BrowserError("BrowserStartTimeout")
+
+    monkeypatch.setattr(BrowserSession, "_await_ready", never_ready)
+    session = BrowserSession(tmp_path / "profile")
+    with pytest.raises(BrowserError, match="BrowserStartTimeout"):
+        session.start(minimized=True, landing="https://claude.ai/settings/usage")
+    assert process.terminated
+
+
 def test_a_page_that_never_answers_is_a_browser_error(monkeypatch):
     class Silent:
         def __init__(self, *_args, **_kwargs):

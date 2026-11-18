@@ -52,6 +52,32 @@ def test_expression_guards_on_the_sites_own_page():
     assert '"gemini.google.com"' in gemini and '"/usage"' in gemini and "location.hash" not in gemini
 
 
+def test_a_browser_that_cannot_start_keeps_its_reason(tmp_path, monkeypatch):
+    """The closing "closed" report must not bury the engine error."""
+    from ai_usage_board.providers import browser_account
+    from ai_usage_board.providers.chrome_session import BrowserError
+
+    class Missing:
+        def __init__(self, _profile):
+            pass
+
+        def start(self, **_kwargs):
+            raise BrowserError("BrowserNotInstalled")
+
+    monkeypatch.setattr(browser_account, "ACCOUNTS_DIR", tmp_path)
+    monkeypatch.setattr(browser_account, "load_extractor", lambda: "")
+    monkeypatch.setattr(browser_account, "BrowserSession", Missing)
+    reports = []
+    browser_account.run(
+        "claude",
+        report=lambda state, error="": reports.append((state, error)),
+        publish=lambda _snapshot: None,
+        command=lambda: {},
+        login_only=False,
+    )
+    assert reports == [("starting", ""), ("engine_error", "BrowserNotInstalled")]
+
+
 def test_every_managed_account_uses_the_browser_helper():
     assert set(manager.MANAGED) == set(SITES)
     for provider in manager.MANAGED:

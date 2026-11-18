@@ -17,8 +17,8 @@ import webbrowser
 from typing import Any, Dict, List, Optional
 
 from .. import APP_ID, APP_NAME
-from ..config import GUIDE_FILE, RESOURCE_DIR, load_settings, save_settings
-from ..core.models import LOCAL_SERVICES, SERVICE_ORDER, SERVICES, order_services
+from ..config import GUIDE_FILE, RESOURCE_DIR, load_settings, log_exception, save_settings
+from ..core.models import LOCAL_SERVICES, SERVICE_ORDER, SERVICES, order_services, validate_snapshot
 from ..providers.antigravity import (
     AntigravityError,
     AntigravityLoginRequired,
@@ -133,6 +133,8 @@ class Widget:
         #: Per-service figures behind the footer summary, as the strip gets them.
         self.summary_items: List[Dict[str, Any]] = []
         self._summary_signature: Optional[str] = None
+        #: Last fault logged from the tick, so a repeating one is written once.
+        self._last_tick_error = ""
 
         set_app_user_model_id(APP_ID)
         enable_dpi_awareness()
@@ -631,6 +633,9 @@ class Widget:
                     cancel=self.closing,
                     login_callback=self.login_urls.put if login else None,
                 )
+                # The CLI's reply is outside data like any page's: labels such
+                # as limitName come from it verbatim. Same gate as the bridge.
+                snapshot = validate_snapshot(snapshot, source="cli")
                 if not self.closing.is_set():
                     self.codex_needs_login = False
                     self.codex_paused = False
@@ -695,6 +700,7 @@ class Widget:
                     # have run, ask it once, and shut it down again.
                     snapshot = launch_and_read(cancel=self.closing)
                     interval = ANTIGRAVITY_LAUNCH_INTERVAL_MS
+                snapshot = validate_snapshot(snapshot, source="local")
                 if not self.closing.is_set():
                     self.agy_paused = False
                     self.agy_interval = interval
@@ -1033,9 +1039,30 @@ class Widget:
     # main loop
     # ------------------------------------------------------------------
     def tick(self) -> None:
+        """Run one beat and always book the next one.
+
+        Tk drops an exception raised in an ``after`` callback after printing
+        it to stderr - which pythonw sends nowhere - and the next beat was
+        only booked at the end of the beat. One stray TclError therefore froze
+        every card for good with no trace at all. Now the failure is logged
+        and the clock keeps running.
+        """
         if self.closing.is_set():
             return
+        try:
+            self._tick()
+        except Exception as error:  # noqa: BLE001 - the clock must survive
+            # The same fault would otherwise be written once a second.
+            signature = f"{type(error).__name__}: {error}"
+            if signature != self._last_tick_error:
+                self._last_tick_error = signature
+                log_exception("widget tick")
+        finally:
+            if not self.closing.is_set():
+                with contextlib.suppress(tk.TclError):
+                    self.root.after(TICK_MS, self.tick)
 
+    def _tick(self) -> None:
         # A queued Codex login URL opens in the user's normal browser.
         while not self.login_urls.empty():
             with contextlib.suppress(queue.Empty):
@@ -1072,8 +1099,6 @@ class Widget:
 
         if changed:
             self._fit()
-
-        self.root.after(TICK_MS, self.tick)
 
     def run(self) -> None:
         self.root.mainloop()

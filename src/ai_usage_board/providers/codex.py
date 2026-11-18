@@ -39,6 +39,20 @@ class CodexNotInstalled(CodexError):
     user installs it, so the widget stops polling and waits for 다시 시도."""
 
 
+class CodexRpcError(CodexError):
+    """The CLI answered a request with a JSON-RPC error.
+
+    Says nothing by itself about the account: an unknown method, bad params
+    or a backend hiccup all arrive this way. :func:`read_codex` asks the CLI
+    whether anyone is signed in before calling it a login problem.
+    """
+
+    def __init__(self, code: Any, message: Any) -> None:
+        self.code = code if isinstance(code, int) and not isinstance(code, bool) else None
+        self.detail = message if isinstance(message, str) else ""
+        super().__init__("Codex 사용량 조회에 실패했습니다 · 잠시 뒤 다시 시도합니다")
+
+
 class CodexLoginRequired(CodexError):
     """The CLI answered, but the account is not usable without signing in.
 
@@ -330,7 +344,9 @@ class _Channel:
                 self._unmatched(message)
                 continue
             if "error" in message:
-                raise CodexLoginRequired("Codex 로그인이 필요합니다")
+                error = message.get("error")
+                error = error if isinstance(error, dict) else {}
+                raise CodexRpcError(error.get("code"), error.get("message"))
             return message.get("result") or {}
 
     def await_method(self, method: str, deadline: float) -> Dict[str, Any]:
@@ -394,9 +410,31 @@ def read_codex(
             _login(channel, deadline, login_callback)
 
         channel.send({"id": 2, "method": "account/rateLimits/read"})
-        return normalize(channel.await_id(2, deadline))
+        try:
+            return normalize(channel.await_id(2, deadline))
+        except CodexRpcError:
+            if not _signed_in(channel, deadline):
+                raise CodexLoginRequired("Codex 로그인이 필요합니다") from None
+            # Signed in, so it is not something a login would fix: leave it
+            # as a plain failure the widget retries on its own.
+            raise
     finally:
         _shutdown(process)
+
+
+def _signed_in(channel: _Channel, deadline: float) -> bool:
+    """Whether the CLI has an account, per its own ``account/read``.
+
+    The reply is ``{"account": {...} | null, ...}``. A CLI too old to know the
+    method answers with an error; that case keeps the earlier reading of
+    "an error means sign in", which is what those builds needed.
+    """
+    channel.send({"id": 4, "method": "account/read", "params": {}})
+    try:
+        result = channel.await_id(4, deadline)
+    except CodexRpcError:
+        return False
+    return isinstance(result.get("account"), dict)
 
 
 def _login(channel: _Channel, deadline: float, login_callback: Callable[[str], None]) -> None:

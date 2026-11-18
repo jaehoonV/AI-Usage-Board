@@ -259,6 +259,11 @@ def run(
             state = name
             report(name, error_type)
 
+    #: Set when the loop already reported why it is stopping. The closing
+    #: "closed" report would otherwise overwrite that reason, and the card
+    #: would say "not connected" instead of "Chrome or Edge is missing".
+    final_reported = False
+
     report("starting", "")
     try:
         while True:
@@ -275,6 +280,7 @@ def run(
                     session = open_session(phase)
                 except BrowserError as error:
                     report("engine_error", str(error))
+                    final_reported = True
                     return
                 state = ""
                 challenge_since = revealed_at = untitled_since = None
@@ -416,7 +422,8 @@ def run(
     finally:
         if session is not None:
             session.close()
-        report("closed", "")
+        if not final_reported:
+            report("closed", "")
 
 
 def _navigate_to_usage(site: Site, session: BrowserSession) -> None:

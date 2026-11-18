@@ -75,6 +75,24 @@ def atomic_write(path: Path, text: str, encoding: str = "utf-8") -> None:
     temporary.replace(path)
 
 
+def log_exception(heading: str = "") -> None:
+    """Append the exception being handled to runtime.log, rotating at 256 KB.
+
+    The app runs under pythonw, where stderr goes nowhere; this file is the
+    only place a failure can leave a trace.
+    """
+    import traceback
+
+    with contextlib.suppress(OSError):
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 256 * 1024:
+            LOG_FILE.replace(LOG_FILE.with_suffix(".previous.log"))
+    with contextlib.suppress(OSError):
+        with LOG_FILE.open("a", encoding="utf-8") as stream:
+            if heading:
+                stream.write(f"\n--- {heading} ---\n")
+            traceback.print_exc(file=stream)
+
+
 def load_settings() -> Dict[str, Any]:
     settings = dict(DEFAULT_SETTINGS)
     settings["hidden"] = []  # never hand out the shared default list
