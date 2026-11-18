@@ -1,6 +1,6 @@
 """AI Usage Board - a local-only Windows widget for AI usage quotas."""
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 #: Shown to the user: window title, tray tooltip, messages.
 APP_NAME = "AI Usage Board"
 #: Used for paths, the window class and the single-instance mutex. No spaces,
