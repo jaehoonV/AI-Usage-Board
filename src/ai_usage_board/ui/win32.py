@@ -291,7 +291,13 @@ class TrayIcon:
         return self._ready.wait(3.0)
 
     def set_tooltip(self, text: str) -> None:
-        self.tooltip = text[:127]
+        """Change the hover text. The widget calls this every second with
+        mostly the same figures, so an unchanged text is not sent to the
+        shell again."""
+        text = text[:127]
+        if text == self.tooltip:
+            return
+        self.tooltip = text
         if self._nid is None or not self._hwnd:
             return
         self._nid.szTip = self.tooltip

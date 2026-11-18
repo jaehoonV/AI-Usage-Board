@@ -25,47 +25,18 @@ class Service:
     #: Two letters for the collapsed strip and tray tooltip, where "Codex" and
     #: "Claude" would otherwise both read as "C".
     short: str
-    usage_url: str
-    #: How the widget obtains numbers for this service.
-    mode: str  # "cli" | "browser" | "local"
-    poll_seconds: int
 
 
+#: Only what the UI needs to name a card. How each service is read, and how
+#: often, lives with the code that reads it: Codex and Antigravity in
+#: ui/widget.py (CODEX_INTERVAL_MS, ANTIGRAVITY_*), Claude and Gemini in
+#: providers/browser_account.py (SITES, RELOAD_SECONDS). Copies kept here fell
+#: out of step with those and were read by nothing.
 SERVICES: Dict[str, Service] = {
-    "codex": Service(
-        key="codex",
-        name="Codex",
-        short="CX",
-        usage_url="https://chatgpt.com/settings/usage?tab=overview",
-        mode="cli",
-        poll_seconds=15,
-    ),
-    "claude": Service(
-        key="claude",
-        name="Claude",
-        short="CL",
-        usage_url="https://claude.ai/settings/usage",
-        mode="browser",
-        poll_seconds=60,
-    ),
-    "gemini": Service(
-        key="gemini",
-        name="Gemini",
-        short="GM",
-        usage_url="https://gemini.google.com/usage",
-        mode="browser",
-        poll_seconds=60,
-    ),
-    "antigravity": Service(
-        key="antigravity",
-        name="Antigravity",
-        short="AG",
-        #: Antigravity publishes no usage page; its numbers live in the IDE.
-        #: The link opens the app's own download/sign-in page instead.
-        usage_url="https://antigravity.google/",
-        mode="local",
-        poll_seconds=60,
-    ),
+    "codex": Service(key="codex", name="Codex", short="CX"),
+    "claude": Service(key="claude", name="Claude", short="CL"),
+    "gemini": Service(key="gemini", name="Gemini", short="GM"),
+    "antigravity": Service(key="antigravity", name="Antigravity", short="AG"),
 }
 
 #: Default top-to-bottom order of the cards.

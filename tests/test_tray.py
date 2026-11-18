@@ -33,3 +33,19 @@ def test_icon_is_added_again_when_the_taskbar_comes_back(monkeypatch):
         tray.stop()
         tray._thread.join(5)
     assert calls[-1] == win32.NIM_DELETE
+
+
+def test_an_unchanged_tooltip_is_not_sent_again(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ctypes.windll.shell32, "Shell_NotifyIconW", lambda message, _data: calls.append(message) or 1)
+    tray = win32.TrayIcon("AI Usage Board", None, on_activate=lambda: None)
+    # Registering the window class twice in one process fails, so the
+    # message loop is not started here; a handle and data are enough.
+    tray._hwnd, tray._nid = 1, type("Nid", (), {"szTip": ""})()
+    monkeypatch.setattr(ctypes, "byref", lambda value: value)
+
+    for _ in range(3):
+        tray.set_tooltip("AI Usage Board\nCL 4%")
+    tray.set_tooltip("AI Usage Board\nCL 5%")
+    assert calls == [win32.NIM_MODIFY, win32.NIM_MODIFY]
+    assert tray._nid.szTip == "AI Usage Board\nCL 5%"
