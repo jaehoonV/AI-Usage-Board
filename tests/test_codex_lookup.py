@@ -111,6 +111,30 @@ def test_an_rpc_error_with_no_account_asks_for_login(fake_server):
         codex.read_codex(timeout=20)
 
 
+def test_shutdown_does_not_wait_on_a_silent_cli():
+    """A CLI that ignores EOF and never writes must not hold shutdown hostage
+    while the reader thread is blocked on its stdout."""
+    import subprocess
+    import sys
+    import threading
+    import time
+
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, encoding="utf-8",
+    )
+    codex._Channel(process, threading.Event())  # starts the blocked reader
+    time.sleep(0.3)
+    done = threading.Event()
+    threading.Thread(target=lambda: (codex._shutdown(process), done.set()), daemon=True).start()
+    try:
+        assert done.wait(10), "_shutdown hung behind the reader thread"
+        assert process.poll() is not None
+    finally:
+        process.kill()
+
+
 def test_gui_binary_is_rejected_with_its_own_message(isolated, monkeypatch):
     gui = fake_exe(isolated / "app" / "codex.exe", subsystem=2)
     monkeypatch.setattr(codex.shutil, "which", lambda name: str(gui) if name == "codex" else None)

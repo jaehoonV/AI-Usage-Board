@@ -8,6 +8,7 @@ before opening).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -452,15 +453,27 @@ def _login(channel: _Channel, deadline: float, login_callback: Callable[[str], N
 
 
 def _shutdown(process: subprocess.Popen) -> None:
-    for stream in (process.stdin, process.stdout):
-        if stream is not None:
-            try:
-                stream.close()
-            except OSError:
-                pass
+    """Stop the CLI, then let go of its pipes - in that order.
+
+    stdout is being read by the channel's pump thread. Closing a buffered
+    stream waits for the lock that a blocked read holds, so closing it while
+    the CLI is still alive would hang until the CLI chose to write or exit.
+    Ending the process first hands the reader its EOF; only then is it closed.
+    """
+    stdin, stdout = process.stdin, process.stdout
+    if stdin is not None:
+        # Nothing reads this side but the CLI, so it never blocks; EOF also
+        # gives a well-behaved server the chance to leave on its own.
+        with contextlib.suppress(OSError, ValueError):
+            stdin.close()
     if process.poll() is None:
         process.terminate()
         try:
             process.wait(timeout=3)
         except subprocess.TimeoutExpired:
             process.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=3)
+    if stdout is not None:
+        with contextlib.suppress(OSError, ValueError):
+            stdout.close()

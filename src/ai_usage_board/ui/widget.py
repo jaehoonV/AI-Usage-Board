@@ -214,6 +214,7 @@ class Widget:
         for widget in (header, title, mark):
             widget.bind("<ButtonPress-1>", self.start_drag)
             widget.bind("<B1-Motion>", self.drag)
+            widget.bind("<ButtonRelease-1>", self.end_drag)
 
         self.close_button = GhostButton(header, palette, "✕", self.hide, padx=SPACE_2)
         self.close_button.pack(side="right", padx=(0, px(SPACE_1)))
@@ -372,6 +373,22 @@ class Widget:
         x, y = event.x_root - offset[0], event.y_root - offset[1]
         self.root.geometry("+{}+{}".format(*self._on_desktop(x, y)))
 
+    def end_drag(self, _event=None) -> None:
+        """Write the new position down the moment the user lets go.
+
+        Only 종료 used to save it. The widget normally lives in the tray until
+        the machine shuts down, and a shutdown never calls close(), so a
+        window moved during the day reopened where it had been before.
+        """
+        if getattr(self, "_drag_offset", None):
+            self._drag_offset = None
+            self._remember_position()
+
+    def _remember_position(self) -> None:
+        self.settings["x"] = self.root.winfo_x()
+        self.settings["y"] = self.root.winfo_y()
+        save_settings(self.settings)
+
     def _on_desktop(self, x: int, y: int) -> tuple:
         """Keep a position inside the desktop - all monitors, not just the first.
 
@@ -390,10 +407,12 @@ class Widget:
         self.settings["pinned"] = pinned
         self.root.attributes("-topmost", pinned)
         self.pin_button.configure(text=self._pin_label())
+        save_settings(self.settings)
 
     def toggle_compact(self) -> None:
         compact = not self.settings.get("compact", False)
         self.settings["compact"] = compact
+        save_settings(self.settings)
         self._layout()
         self.compact_button.configure(text="+" if compact else "–")
         self._fitted = None
@@ -1106,9 +1125,7 @@ class Widget:
     def close(self) -> None:
         self.closing.set()
         self.close_settings()
-        self.settings["x"] = self.root.winfo_x()
-        self.settings["y"] = self.root.winfo_y()
-        save_settings(self.settings)
+        self._remember_position()
         self._close_strip()
         if self.tray is not None:
             with contextlib.suppress(Exception):

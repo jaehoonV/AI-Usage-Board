@@ -305,6 +305,19 @@ class TrayIcon:
 
     # -- internals ---------------------------------------------------------
     def _run(self) -> None:
+        """Thread body. A failure here used to kill the thread silently and
+        leave start() waiting out its full timeout; now it is logged and
+        start() is released at once."""
+        try:
+            self._serve()
+        except Exception:  # noqa: BLE001 - a missing tray must not take the widget down
+            from ..config import log_exception
+
+            log_exception("tray icon")
+        finally:
+            self._ready.set()
+
+    def _serve(self) -> None:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
 
@@ -348,8 +361,33 @@ class TrayIcon:
         user32.TrackPopupMenu.restype = ctypes.c_int
         user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
         user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
+        user32.RegisterWindowMessageW.restype = wintypes.UINT
+        # The module handle is a 64-bit address. ctypes' default int return
+        # kept only its low 32 bits; whenever those came out negative, the
+        # value read back from WNDCLASS no longer fitted CreateWindowExW's
+        # default int argument, the call raised, and the tray never appeared.
+        # Where the image loads decides that, so it failed on some launches only.
+        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+        user32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASS)]
+        user32.RegisterClassW.restype = wintypes.ATOM
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+        ]
+
+        #: Broadcast to every top-level window when Explorer starts again
+        #: after a crash or an update. The new taskbar knows no icons, so each
+        #: program has to add its own back - otherwise ours is simply gone,
+        #: and with the window sent to the tray there is no way back to it.
+        taskbar_created = user32.RegisterWindowMessageW("TaskbarCreated")
 
         def window_proc(hwnd, message, wparam, lparam):
+            if taskbar_created and message == taskbar_created:
+                self._add_icon()
+                return 0
             if message == WM_APP_TRAY:
                 event = lparam & 0xFFFF
                 if event == WM_LBUTTONUP:
@@ -374,7 +412,9 @@ class TrayIcon:
 
         self._hwnd = user32.CreateWindowExW(
             0, "AIUsageBoardTray", "AI Usage Board", 0, 0, 0, 0, 0, None, None, klass.instance, None
-        )
+        ) or 0
+        if not self._hwnd:
+            raise OSError(ctypes.get_last_error() or "CreateWindowExW failed")
 
         hicon = 0
         if self.icon_path and Path(self.icon_path).is_file():
@@ -397,7 +437,7 @@ class TrayIcon:
         self._nid.uCallbackMessage = WM_APP_TRAY
         self._nid.hIcon = hicon
         self._nid.szTip = self.tooltip
-        ctypes.windll.shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(self._nid))
+        self._add_icon()
         self._ready.set()
 
         message = wintypes.MSG()
@@ -408,6 +448,14 @@ class TrayIcon:
         with contextlib.suppress(Exception):
             ctypes.windll.shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self._nid))
         self._hwnd = 0
+
+    def _add_icon(self) -> None:
+        """Put the icon in the notification area, with the current tooltip."""
+        if self._nid is None:
+            return
+        self._nid.szTip = self.tooltip
+        with contextlib.suppress(Exception):
+            ctypes.windll.shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(self._nid))
 
     def _show_menu(self, hwnd: int) -> None:
         if not self.menu_items:
