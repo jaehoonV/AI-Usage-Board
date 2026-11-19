@@ -223,6 +223,30 @@ def raise_topmost(hwnd: int) -> None:
         )
 
 
+SW_RESTORE = 9
+
+
+def restore_if_minimized(hwnd: int) -> bool:
+    """Bring ``hwnd`` out of the minimized state; True if it was minimized.
+
+    Windows hands the launcher's requested show state (STARTUPINFO) to a
+    process's first window. A shortcut set to "minimized", or a zip tool or
+    launcher that asks for it, then starts the widget minimized - and a
+    frameless window has no taskbar button to click it back. SW_RESTORE is
+    not one of the show commands that rule rewrites, so it always applies.
+    """
+    if not IS_WINDOWS or not hwnd:
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        if not user32.IsIconic(wintypes.HWND(hwnd)):
+            return False
+        user32.ShowWindow(wintypes.HWND(hwnd), SW_RESTORE)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def set_app_user_model_id(app_id: str) -> None:
     if not IS_WINDOWS:
         return

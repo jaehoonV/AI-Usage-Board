@@ -70,6 +70,7 @@ from .win32 import (
     work_area_at,
     drop_shadow,
     enable_dpi_awareness,
+    restore_if_minimized,
     round_corners,
     set_app_user_model_id,
 )
@@ -167,6 +168,7 @@ class Widget:
         self.root.deiconify()
         self.root.update_idletasks()
         self._apply_window_chrome()
+        self._show_on_start()
         self._start_tray()
         if self.settings.get('strip'):
             self._open_strip()
@@ -302,6 +304,21 @@ class Widget:
             hwnd = int(self.root.wm_frame(), 16) if os.name == "nt" else 0
             round_corners(hwnd)
             drop_shadow(hwnd)
+
+    def _show_on_start(self) -> None:
+        """Open on screen and in front, whatever show state the launcher asked.
+
+        Tk gives its first window the launcher's show state, so a shortcut set
+        to "minimized" or a zip tool that asks for it starts the widget
+        minimized. Frameless, it then has no taskbar button and looks like it
+        never started.
+        """
+        with contextlib.suppress(Exception):
+            if self.root.state() == "iconic":
+                self.root.state("normal")
+            restore_if_minimized(int(self.root.wm_frame(), 16) if os.name == "nt" else 0)
+            self.root.update_idletasks()
+        self.reveal()
 
     def _window_size(self) -> tuple:
         self.root.update_idletasks()
