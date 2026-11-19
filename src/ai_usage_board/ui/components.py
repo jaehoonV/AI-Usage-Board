@@ -180,8 +180,12 @@ GLYPH_CHECK = ""
 GLYPH_REFRESH = ""
 GLYPH_INFO = ""
 GLYPH_POWER = ""
+GLYPH_FEEDBACK = ""
 #: Plain-text stand-ins for machines without either icon font.
-_FALLBACK = {GLYPH_SETTINGS: "⚙", GLYPH_CHECK: "✓", GLYPH_REFRESH: "↻", GLYPH_INFO: "?", GLYPH_POWER: "×"}
+_FALLBACK = {
+    GLYPH_SETTINGS: "⚙", GLYPH_CHECK: "✓", GLYPH_REFRESH: "↻", GLYPH_INFO: "?", GLYPH_POWER: "×",
+    GLYPH_FEEDBACK: "✉",
+}
 
 
 def icon_font(root: tk.Misc):

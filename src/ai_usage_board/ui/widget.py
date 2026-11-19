@@ -16,8 +16,8 @@ import tkinter as tk
 import webbrowser
 from typing import Any, Dict, List, Optional
 
-from .. import APP_ID, APP_NAME
-from ..config import GUIDE_FILE, RESOURCE_DIR, load_settings, log_exception, save_settings
+from .. import APP_ID, APP_NAME, __version__
+from ..config import CONTACT_FILE, GUIDE_FILE, RESOURCE_DIR, load_settings, log_exception, save_settings
 from ..core.models import LOCAL_SERVICES, SERVICE_ORDER, SERVICES, order_services, validate_snapshot
 from ..providers.antigravity import (
     AntigravityError,
@@ -48,6 +48,7 @@ from ..theme import (
 )
 from .strip import TaskbarStrip, figure_color
 from .components import (
+    GLYPH_FEEDBACK,
     GLYPH_INFO,
     GLYPH_POWER,
     GLYPH_REFRESH,
@@ -212,8 +213,11 @@ class Widget:
 
         title = tk.Label(header, text=APP_NAME, font=TYPE.title, bg=palette.canvas, fg=palette.text)
         title.pack(side="left")
+        # Nudged down so the small text sits on the title's baseline, not its middle.
+        version = tk.Label(header, text=f"ver {__version__}", font=TYPE.version, bg=palette.canvas, fg=palette.faint)
+        version.pack(side="left", padx=(px(SPACE_1), 0), pady=(px(3), 0))
 
-        for widget in (header, title, mark):
+        for widget in (header, title, version, mark):
             widget.bind("<ButtonPress-1>", self.start_drag)
             widget.bind("<B1-Motion>", self.drag)
             widget.bind("<ButtonRelease-1>", self.end_drag)
@@ -489,6 +493,7 @@ class Widget:
         )
         popover.add_action("전체 새로고침", self.refresh_all, icon=GLYPH_REFRESH)
         popover.add_action("연결 안내", self.open_guide, icon=GLYPH_INFO)
+        popover.add_action("문의하기", self.open_contact, icon=GLYPH_FEEDBACK)
         popover.add_separator()
         popover.add_heading("표시할 서비스")
         for key in SERVICE_ORDER:
@@ -636,6 +641,12 @@ class Widget:
         if GUIDE_FILE.is_file():
             with contextlib.suppress(OSError):
                 os.startfile(str(GUIDE_FILE))  # noqa: S606 - a local html file we wrote
+
+    def open_contact(self) -> None:
+        """The contact page: GitHub Issues, or mail for people without an account."""
+        if CONTACT_FILE.is_file():
+            with contextlib.suppress(OSError):
+                os.startfile(str(CONTACT_FILE))  # noqa: S606 - a local html file we wrote
 
     # ------------------------------------------------------------------
     # refreshing

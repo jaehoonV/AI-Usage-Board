@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator
 
-from . import APP_SLUG
+from . import APP_SLUG, CONTACT_EMAIL, REPO_URL, __version__
 
 def _resource_dir() -> Path:
     """Where the read-only files that ship with the build live.
@@ -43,6 +43,7 @@ TOKEN_FILE = DATA_DIR / ".bridge-token"
 LOG_FILE = DATA_DIR / "runtime.log"
 ACCOUNTS_DIR = DATA_DIR / "accounts"
 GUIDE_FILE = DATA_DIR / "connect-guide.html"
+CONTACT_FILE = DATA_DIR / "contact.html"
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "x": None,
@@ -127,17 +128,61 @@ def save_settings(settings: Dict[str, Any]) -> None:
 
 
 def prepare_user_files() -> None:
-    """Render the connection guide into the data folder with its path filled in.
+    """Render the connection guide and the contact page into the data folder.
 
-    The guide is opened with the default browser, which cannot read files out
-    of a PyInstaller bundle, so it needs a copy of its own.
+    Both are opened with the default browser, which cannot read files out of
+    a PyInstaller bundle, so they need copies of their own. They sit side by
+    side so the guide can link to the contact page by its bare name.
     """
     ensure_dirs()
-    guide = RESOURCE_DIR / "connect-guide.html"
-    if guide.is_file():
-        text = guide.read_text(encoding="utf-8")
-        text = text.replace("{{DATA_FOLDER}}", html.escape(str(DATA_DIR)))
-        atomic_write(GUIDE_FILE, text)
+    values = {
+        # This machine's real folder, so it can be pasted straight into Explorer.
+        "DATA_FOLDER": str(DATA_DIR),
+        "VERSION": __version__,
+        "ISSUE_URL": new_issue_url(),
+        "EMAIL": CONTACT_EMAIL,
+        "MAILTO_URL": mailto_url(),
+        "GMAIL_URL": gmail_compose_url(),
+    }
+    for source, target in (("connect-guide.html", GUIDE_FILE), ("contact.html", CONTACT_FILE)):
+        page = RESOURCE_DIR / source
+        if not page.is_file():
+            continue
+        text = page.read_text(encoding="utf-8")
+        for key, value in values.items():
+            text = text.replace("{{" + key + "}}", html.escape(value))
+        atomic_write(target, text)
+
+
+#: What a report should carry, written under a rule so the report itself goes
+#: above it. Just the version: the one fact nobody remembers to include.
+_REPORT_FOOTER = f"\n\n---\nver {__version__}"
+_MAIL_SUBJECT = "[AI Usage Board] 문의"
+
+
+def new_issue_url() -> str:
+    """A new GitHub issue with the app version filled in."""
+    from urllib.parse import urlencode
+
+    return f"{REPO_URL}/issues/new?{urlencode({'body': _REPORT_FOOTER})}"
+
+
+def mailto_url() -> str:
+    """A message in the default mail app, subject and version filled in.
+
+    quote, not urlencode: mail apps show a '+' for a space literally.
+    """
+    from urllib.parse import quote
+
+    return f"mailto:{CONTACT_EMAIL}?subject={quote(_MAIL_SUBJECT)}&body={quote(_REPORT_FOOTER)}"
+
+
+def gmail_compose_url() -> str:
+    """The same message in Gmail on the web, for machines with no mail app."""
+    from urllib.parse import urlencode
+
+    query = urlencode({"view": "cm", "fs": "1", "to": CONTACT_EMAIL, "su": _MAIL_SUBJECT, "body": _REPORT_FOOTER})
+    return f"https://mail.google.com/mail/?{query}"
 
 
 @contextlib.contextmanager

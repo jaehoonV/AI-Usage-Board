@@ -67,6 +67,8 @@ def _family() -> str:
 @dataclass(frozen=True)
 class Type:
     title: Tuple[str, int, str] = field(default_factory=lambda: (_family(), 11, "bold"))
+    #: "ver 1.1.3" beside the title: same family, small and quiet.
+    version: Tuple[str, int, str] = field(default_factory=lambda: (_family(), 8, "normal"))
     service: Tuple[str, int, str] = field(default_factory=lambda: (_family(), 10, "bold"))
     value: Tuple[str, int, str] = field(default_factory=lambda: (_family(), 14, "bold"))
     label: Tuple[str, int, str] = field(default_factory=lambda: (_KR, 9, "normal"))

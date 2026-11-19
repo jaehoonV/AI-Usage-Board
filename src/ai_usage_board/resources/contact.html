@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Usage Board 문의</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --canvas: #ffffff;
+    --surface: #ffffff;
+    --border: #e4e7ec;
+    --text: #111827;
+    --muted: #616b7a;
+    --faint: #9aa3b0;
+    --accent: #2563eb;
+    --on-accent: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #15171c; --surface: #1c1f26; --border: #2c313a;
+      --text: #e9ecf1; --muted: #9ba4b2; --faint: #6e7785; --accent: #6aa2ff; --on-accent: #0b1220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 48px 16px 80px;
+    background: var(--canvas); color: var(--text);
+    font: 14px/1.7 "Segoe UI Variable Display", "Segoe UI", "맑은 고딕", system-ui, sans-serif;
+  }
+  main { max-width: 680px; margin: 0 auto; }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .mark { display: flex; align-items: flex-end; gap: 2px; height: 18px; }
+  .mark i { display: block; width: 4px; border-radius: 1px; }
+  .mark i:nth-child(1) { height: 11px; background: var(--accent); }
+  .mark i:nth-child(2) { height: 18px; background: var(--muted); }
+  .mark i:nth-child(3) { height: 7px;  background: var(--faint); }
+  h1 { font-size: 19px; margin: 0; letter-spacing: -.01em; }
+  .lede { color: var(--muted); margin: 0 0 36px; }
+  section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 22px; margin-bottom: 14px;
+  }
+  h2 { font-size: 14px; margin: 0 0 6px; }
+  p { margin: 0; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; align-items: center; }
+  .button {
+    display: inline-block; padding: 7px 14px; border-radius: 8px; font-weight: 600;
+    text-decoration: none; border: 1px solid var(--border); color: var(--text); background: transparent;
+    font: inherit; font-weight: 600; cursor: pointer;
+  }
+  .button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code {
+    font: 13px/1.5 "Cascadia Mono", Consolas, monospace;
+    background: rgba(127,127,127,.12); padding: 3px 8px; border-radius: 5px;
+    word-break: break-all;
+  }
+  .meta { color: var(--faint); font-size: 12px; margin-top: 10px; }
+  .path { margin-top: 10px; }
+  .copied { color: var(--muted); font-size: 12px; }
+  footer { color: var(--faint); font-size: 12px; margin-top: 28px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <span class="mark"><i></i><i></i><i></i></span>
+    <h1>AI Usage Board 문의</h1>
+  </div>
+  <p class="lede">문제가 생겼거나 바라는 기능이 있으면 편한 방법으로 알려 주세요. 지금 쓰는 버전은 <strong>{{VERSION}}</strong>입니다.</p>
+
+  <section>
+    <h2>GitHub Issues</h2>
+    <p>GitHub 계정이 있으면 이쪽이 가장 빠릅니다. 진행 상황도 같은 화면에서 볼 수 있습니다.</p>
+    <div class="actions">
+      <a class="button primary" href="{{ISSUE_URL}}" target="_blank" rel="noopener">이슈 남기기</a>
+    </div>
+    <p class="meta">버전은 미리 채워져 있습니다. GitHub 로그인이 필요합니다.</p>
+  </section>
+
+  <section>
+    <h2>메일</h2>
+    <p>GitHub 계정이 없으면 메일로 보내 주세요.</p>
+    <div class="actions">
+      <code id="email">{{EMAIL}}</code>
+      <button class="button" type="button" id="copy">주소 복사</button>
+      <a class="button" href="{{GMAIL_URL}}" target="_blank" rel="noopener">Gmail에서 쓰기</a>
+      <a class="button" href="{{MAILTO_URL}}">메일 앱으로 쓰기</a>
+      <span class="copied" id="copied" aria-live="polite"></span>
+    </div>
+    <p class="meta">메일 앱이 설정되어 있지 않으면 <strong>메일 앱으로 쓰기</strong>는 아무 일도 하지 않습니다. 그럴 땐 주소를 복사해 쓰는 메일에서 보내 주세요.</p>
+  </section>
+
+  <section>
+    <h2>알려 주시면 좋은 것</h2>
+    <p>무엇을 하다가 어떻게 됐는지, 어느 카드(Codex · Claude · Gemini · Antigravity)인지. 오류가 났다면 아래 폴더의 <code>runtime.log</code> 내용도 함께 붙여 주면 원인을 찾기 쉽습니다.</p>
+    <p class="path"><code>{{DATA_FOLDER}}</code></p>
+  </section>
+
+  <footer>AI Usage Board {{VERSION}}</footer>
+</main>
+<script>
+  (function () {
+    var button = document.getElementById("copy");
+    var note = document.getElementById("copied");
+    var address = document.getElementById("email").textContent;
+    function done(ok) {
+      note.textContent = ok ? "복사했습니다" : "복사하지 못했습니다. 주소를 직접 선택해 복사해 주세요.";
+    }
+    button.addEventListener("click", function () {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(address).then(function () { done(true); }, fallback);
+      } else {
+        fallback();
+      }
+    });
+    function fallback() {
+      var field = document.createElement("textarea");
+      field.value = address;
+      field.style.position = "fixed";
+      field.style.opacity = "0";
+      document.body.appendChild(field);
+      field.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(field);
+      done(ok);
+    }
+  })();
+</script>
+</body>
+</html>

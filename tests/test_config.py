@@ -103,5 +103,61 @@ def test_resources_are_found():
     """The tray icon, page reader and guide all come from RESOURCE_DIR."""
     from ai_usage_board.config import RESOURCE_DIR
 
-    for name in ("app.ico", "extractor.js", "connect-guide.html"):
+    for name in ("app.ico", "extractor.js", "connect-guide.html", "contact.html"):
         assert (RESOURCE_DIR / name).is_file(), name
+
+
+def test_issue_link_carries_only_the_version():
+    from urllib.parse import parse_qs, urlsplit
+
+    from ai_usage_board import REPO_URL, __version__
+
+    url = config.new_issue_url()
+    parts = urlsplit(url)
+    assert url.startswith(f"{REPO_URL}/issues/new?")
+    assert list(parse_qs(parts.query)) == ["body"]
+    body = parse_qs(parts.query)["body"][0]
+    assert body.strip().splitlines()[-1] == f"ver {__version__}"
+
+
+def test_mail_links_carry_the_address_subject_and_version():
+    from urllib.parse import parse_qs, unquote, urlsplit
+
+    from ai_usage_board import CONTACT_EMAIL, __version__
+
+    mailto = config.mailto_url()
+    assert mailto.startswith(f"mailto:{CONTACT_EMAIL}?")
+    # A mail app shows '+' literally, so spaces must be %20.
+    assert "+" not in mailto
+    assert unquote(mailto).endswith(f"ver {__version__}")
+
+    gmail = parse_qs(urlsplit(config.gmail_compose_url()).query)
+    assert gmail["to"] == [CONTACT_EMAIL]
+    assert gmail["body"][0].strip().endswith(f"ver {__version__}")
+
+
+def test_pages_show_this_machines_data_folder(tmp_path, monkeypatch):
+    import html
+
+    from ai_usage_board import CONTACT_EMAIL, __version__
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "ACCOUNTS_DIR", tmp_path / "accounts")
+    monkeypatch.setattr(config, "GUIDE_FILE", tmp_path / "connect-guide.html")
+    monkeypatch.setattr(config, "CONTACT_FILE", tmp_path / "contact.html")
+    config.prepare_user_files()
+
+    guide = (tmp_path / "connect-guide.html").read_text(encoding="utf-8")
+    contact = (tmp_path / "contact.html").read_text(encoding="utf-8")
+    for text in (guide, contact):
+        assert "{{" not in text
+        # The real folder of the machine running it, ready for Explorer.
+        assert f"<code>{html.escape(str(tmp_path))}</code>" in text
+    assert 'href="contact.html"' in guide
+    assert 'href="https://github.com/jaehoonV/AI-Usage-Board/issues/new?body=' in contact
+    assert CONTACT_EMAIL in contact
+    assert 'href="https://mail.google.com/mail/?view=cm&amp;' in contact
+    assert f'href="mailto:{CONTACT_EMAIL}?subject=' in contact
+    assert __version__ in contact
+    # The web links leave the contact page open behind them; mailto has no tab to open.
+    assert contact.count('target="_blank" rel="noopener"') == 2

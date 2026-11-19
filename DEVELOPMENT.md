@@ -281,7 +281,13 @@ Gemini → Claude → Codex → Antigravity가 된다.
 
 상태줄 왼쪽의 톱니바퀴를 누르면 작은 메뉴가 위로 열린다 (`Widget.open_settings`).
 
-* `전체 새로고침` · `연결 안내` — 누르면 실행하고 메뉴가 닫힌다.
+* `전체 새로고침` · `연결 안내` · `문의하기` — 누르면 실행하고 메뉴가 닫힌다. `문의하기`는 문의 안내 페이지
+  (`contact.html`)를 연다. 거기서 GitHub Issues(`config.new_issue_url()`)나 메일(`CONTACT_EMAIL` — 주소 복사,
+  Gmail 웹 작성 화면, 메일 앱)로 문의한다. Issues 본문과 메일 본문 맨 아래에는 `ver 1.1.3`처럼 앱 버전만 채운다.
+  연결 안내문의 `문의 · 버그 신고` 칸은 같은 폴더의 `contact.html`로 링크한다. 두 페이지 모두
+  `config.prepare_user_files()`가 `{{...}}` 자리를 채워 데이터 폴더에 쓴다. 데이터 폴더(`{{DATA_FOLDER}}`)는
+  실행한 PC의 실제 경로로 채운다 — 탐색기 주소창에 그대로 붙여 넣을 수 있게. 이슈·메일 본문에는 경로를 넣지
+  않는다(버전만).
 * `표시할 서비스` — Claude / Codex / Gemini / Antigravity 카드를 하나씩 켜고 끈다. 여러 개를 연달아
   바꿀 수 있도록 메뉴는 열린 채로 남는다. 선택은 `settings.json`의 `hidden`에 바로 저장된다.
 
@@ -381,6 +387,7 @@ src/ai_usage_board/
 └── resources/
     ├── extractor.js     페이지 리더 (읽는 범위가 코드에 명시됨)
     ├── connect-guide.html
+    ├── contact.html     문의 안내 (GitHub Issues · 메일)
     └── app.ico          tools/make_icon.py 로 생성
 ```
 
