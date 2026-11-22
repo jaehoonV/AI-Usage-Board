@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai_usage_board"
-version = "1.1.4"
+version = "1.1.5"
 description = "Windows desktop widget that shows remaining AI usage quota for Codex, Claude, Gemini and Antigravity."
 readme = "README.md"
 requires-python = ">=3.11"
