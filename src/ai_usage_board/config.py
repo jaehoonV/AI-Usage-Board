@@ -2,7 +2,8 @@
 
 Everything AI Usage Board writes lives under one per-user directory so the app can be
 removed by deleting a folder. Nothing is written outside it and nothing is
-written to the registry.
+written to the registry - save the Startup-folder shortcut the user may turn
+on from the settings menu (see autostart.py).
 """
 from __future__ import annotations
 

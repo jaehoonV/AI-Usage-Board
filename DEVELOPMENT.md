@@ -365,6 +365,7 @@ AIUsageBoard.exe  (위젯 · Tk)
 src/ai_usage_board/
 ├── __main__.py          진입점 · 위젯/헬퍼 프로세스 분기
 ├── config.py            경로 · 설정 · 단일 인스턴스 뮤텍스
+├── autostart.py         Windows 시작 시 실행 (시작 프로그램 폴더 바로 가기)
 ├── theme.py             디자인 토큰 · DPI 스케일
 ├── core/
 │   ├── models.py        서비스 레지스트리 · validate_snapshot
@@ -395,6 +396,13 @@ src/ai_usage_board/
 설정, 캐시, 브리지 토큰, 브라우저 프로필, 로그. 지우려면 이 폴더만 삭제하면 된다.
 레지스트리에는 아무것도 쓰지 않는다.
 
+예외는 하나, 사용자가 `Windows 시작 시 실행`을 켰을 때 시작 프로그램 폴더에 두는
+`AI Usage Board.lnk`다. 레지스트리 `Run` 키 대신 바로 가기를 쓰는 이유는 위의 약속을 지키면서
+사용자가 탐색기에서 직접 보고 지울 수 있게 하기 위해서다. 켜짐 여부는 settings.json이 아니라
+이 파일이 있는지로 판단한다 — 손으로 지우거나 작업 관리자에서 끈 것도 메뉴에 그대로 반영된다.
+바로 가기는 셸의 ShellLink COM 객체를 ctypes로 직접 불러 만든다 (추가 패키지 없음,
+PowerShell 창 깜빡임 없음). 소스에서 켜면 `pythonw run.py`를, exe에서 켜면 그 exe를 가리킨다.
+
 ---
 
 ## 테스트
@@ -407,7 +415,7 @@ py -m pip install pytest
 py -m pytest -q
 ```
 
-105개다. 검증기(주입 페이로드 거부, 거짓 시계 무시), 저장소(재적재), 브리지(토큰 / Host /
+112개다. 검증기(주입 페이로드 거부, 거짓 시계 무시), 저장소(재적재), 브리지(토큰 / Host /
 Origin 거부), Codex CLI 탐색, 페이지 리더(Node로 실제 실행, 없으면 건너뜀), 조회용 브라우저
 플래그, 그리고 Antigravity 쪽이 가장 두껍다 — 서버 판별, 응답 해석의
 함정(빈 `quotaInfo`와 0의 차이, NaN), 루프백 강제와 리다이렉트 차단, 앱 없이 띄울 때의

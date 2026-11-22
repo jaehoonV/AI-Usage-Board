@@ -16,7 +16,7 @@ import tkinter as tk
 import webbrowser
 from typing import Any, Dict, List, Optional
 
-from .. import APP_ID, APP_NAME, __version__
+from .. import APP_ID, APP_NAME, __version__, autostart
 from ..config import CONTACT_FILE, GUIDE_FILE, RESOURCE_DIR, load_settings, log_exception, save_settings
 from ..core.models import LOCAL_SERVICES, SERVICE_ORDER, SERVICES, order_services, validate_snapshot
 from ..providers.antigravity import (
@@ -518,6 +518,15 @@ class Widget:
                 lambda c=choice: self.settings.get("theme", "auto") == c,
                 lambda c=choice: self.set_theme(c),
             )
+        popover.add_separator()
+        popover.add_heading("시작")
+        # The check is read from the shortcut itself, so a failed write, or
+        # one deleted by hand in the Startup folder, shows as off.
+        popover.add_toggle(
+            "Windows 시작 시 실행",
+            autostart.is_enabled,
+            lambda: autostart.set_enabled(not autostart.is_enabled()),
+        )
         popover.add_separator()
         # ✕ only sends the window to the tray; this is the way out from
         # inside the window, without hunting for the tray icon.
