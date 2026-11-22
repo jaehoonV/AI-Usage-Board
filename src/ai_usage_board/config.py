@@ -12,6 +12,7 @@ import html
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterator
 
@@ -69,12 +70,31 @@ def ensure_dirs() -> None:
     ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+#: How long atomic_write keeps retrying a replace Windows refused because
+#: someone else - antivirus, the search indexer, a second copy of the app -
+#: had the file open for a moment (WinError 32).
+_REPLACE_ATTEMPTS = 5
+_REPLACE_PAUSE = 0.1
+
+
 def atomic_write(path: Path, text: str, encoding: str = "utf-8") -> None:
     """Write via a sibling temp file so a crash never leaves a half file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    # Per-process name: two copies starting together must not share one temp file.
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     temporary.write_text(text, encoding=encoding)
-    temporary.replace(path)
+    try:
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                temporary.replace(path)
+                return
+            except PermissionError:
+                if attempt == _REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REPLACE_PAUSE * (attempt + 1))
+    finally:
+        with contextlib.suppress(OSError):
+            temporary.unlink(missing_ok=True)
 
 
 def log_exception(heading: str = "") -> None:
@@ -152,7 +172,14 @@ def prepare_user_files() -> None:
         text = page.read_text(encoding="utf-8")
         for key, value in values.items():
             text = text.replace("{{" + key + "}}", html.escape(value))
-        atomic_write(target, text)
+        # A page that cannot be refreshed is no reason to keep the widget from
+        # starting: the old copy, if any, still opens; the failure goes to the log.
+        try:
+            if target.is_file() and target.read_text(encoding="utf-8") == text:
+                continue  # Unchanged since the last start: nothing to lock against.
+            atomic_write(target, text)
+        except (OSError, UnicodeDecodeError):
+            log_exception(f"write {target.name}")
 
 
 #: What a report should carry, written under a rule so the report itself goes

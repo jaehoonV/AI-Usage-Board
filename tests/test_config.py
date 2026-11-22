@@ -161,3 +161,69 @@ def test_pages_show_this_machines_data_folder(tmp_path, monkeypatch):
     assert __version__ in contact
     # The web links leave the contact page open behind them; mailto has no tab to open.
     assert contact.count('target="_blank" rel="noopener"') == 2
+
+
+def _point_pages_at(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "ACCOUNTS_DIR", tmp_path / "accounts")
+    monkeypatch.setattr(config, "GUIDE_FILE", tmp_path / "connect-guide.html")
+    monkeypatch.setattr(config, "CONTACT_FILE", tmp_path / "contact.html")
+    monkeypatch.setattr(config, "LOG_FILE", tmp_path / "runtime.log")
+
+
+def test_unchanged_pages_are_not_rewritten(tmp_path, monkeypatch):
+    _point_pages_at(tmp_path, monkeypatch)
+    config.prepare_user_files()
+
+    writes = []
+    monkeypatch.setattr(config, "atomic_write", lambda path, text: writes.append(path))
+    config.prepare_user_files()
+    assert writes == []
+
+
+def test_a_locked_page_does_not_stop_startup(tmp_path, monkeypatch):
+    _point_pages_at(tmp_path, monkeypatch)
+
+    def locked(path, text):
+        raise PermissionError(32, "in use", str(path))
+
+    monkeypatch.setattr(config, "atomic_write", locked)
+    config.prepare_user_files()  # must not raise
+    assert "PermissionError" in (tmp_path / "runtime.log").read_text(encoding="utf-8")
+
+
+def test_atomic_write_retries_a_briefly_locked_target(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(config, "_REPLACE_PAUSE", 0)
+    real_replace = Path.replace
+    calls = []
+
+    def flaky(self, target):
+        calls.append(target)
+        if len(calls) < 3:
+            raise PermissionError(32, "in use")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    target = tmp_path / "page.html"
+    config.atomic_write(target, "hello")
+    assert target.read_text(encoding="utf-8") == "hello"
+    assert len(calls) == 3
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_gives_up_and_cleans_its_temp(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import pytest
+
+    monkeypatch.setattr(config, "_REPLACE_PAUSE", 0)
+
+    def always_locked(self, target):
+        raise PermissionError(32, "in use")
+
+    monkeypatch.setattr(Path, "replace", always_locked)
+    with pytest.raises(PermissionError):
+        config.atomic_write(tmp_path / "page.html", "hello")
+    assert list(tmp_path.glob("*.tmp")) == []
