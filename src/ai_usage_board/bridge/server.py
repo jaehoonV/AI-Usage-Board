@@ -148,7 +148,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 return
             if state in (
                 "login_required", "engine_error", "page_error",
-                "closed", "verify_required", "login_manual",
+                "closed", "verify_required", "verify_stuck", "login_manual",
             ):
                 message = _ACCOUNT_MESSAGES.get(state, "연결 상태를 확인해 주세요")
                 if state == "engine_error":
@@ -180,6 +180,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
 _ACCOUNT_MESSAGES = {
     "login_manual": "열린 창에서 로그인한 뒤 '로그인 완료'를 눌러 주세요",
     "verify_required": "보안 확인 필요 · '창 열기'를 눌러 체크해 주세요",
+    "verify_stuck": "보안 확인이 계속 반복됩니다 · '다시 연결'을 누르면 로그인부터 새로 시작합니다",
     "login_required": "계정 연결 필요",
     "engine_error": "연결 창을 열지 못했습니다",
     "page_error": "사용량 화면 확인 필요",
@@ -189,7 +190,7 @@ _ACCOUNT_MESSAGES = {
 #: A bare "could not open" leaves the user nowhere; say what is missing.
 _ENGINE_MESSAGES = {
     "BrowserNotInstalled": "Chrome 또는 Edge를 찾을 수 없습니다 · 둘 중 하나를 설치해 주세요",
-    "BrowserExited": "브라우저가 바로 종료됐습니다 · 트레이 메뉴에서 연결을 초기화해 주세요",
+    "BrowserExited": "브라우저가 바로 종료됐습니다 · '다시 연결'을 눌러 주세요",
     "BrowserStartTimeout": "브라우저가 응답하지 않습니다 · 다시 시도해 주세요",
     "HelperCrashed": "연결 창이 예기치 않게 종료됐습니다 · runtime.log를 확인해 주세요",
 }

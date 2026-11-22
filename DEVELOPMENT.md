@@ -223,8 +223,10 @@ Chrome은 몇 분 동안 화면에 보이지 않은 페이지를 거의 멈춰 �
 하나에 1분 가까이 걸려 읽기가 매번 시간 초과로 끝난다. 그래서 조회용 브라우저만
 `--disable-renderer-backgrounding`, `--disable-background-timer-throttling`,
 `--disable-backgrounding-occluded-windows`와 `IntensiveWakeUpThrottling` 끄기를 붙여 띄운다
-(`browser_command`). 로그인 창에는 붙이지 않는다. 수치가 최신인지 확실히 하려고 60초마다
-사용량 페이지를 `Page.reload` 하기도 한다 (`RELOAD_SECONDS`).
+(`browser_command`). 로그인 창에는 붙이지 않는다. 수치가 최신인지 확실히 하려고 5분마다
+사용량 페이지를 `Page.reload` 하기도 한다 (`RELOAD_SECONDS`). 예전에는 60초마다였는데, 새로
+고칠 때마다 Cloudflare를 다시 지나가야 하고 하루 종일 1분 박자로 새로 고치는 브라우저는 봇처럼
+보여서 줄였다. `전체 새로고침`은 주기와 상관없이 바로 새로 고친다.
 
 단, **보안 확인 페이지에서는 절대 새로고침하지 않는다.** 확인 페이지는 주소가 사용량 페이지와
 같아서, 새로고침하면 확인이 처음부터 다시 시작되고 디버거가 붙어 끝나지 않는다.
@@ -273,7 +275,7 @@ Gemini → Claude → Codex → Antigravity가 된다.
 규칙 자체는 `core/models.py`의 `order_services()`에 있고, 재배치는 `ui/widget.py`의
 `_reorder()`가 담당한다.
 
-갱신 주기는 Codex 15초, Claude·Gemini는 15초마다 읽고 페이지는 1분마다 새로 고친다. Antigravity는 앱이 떠 있으면 1분, 서버를
+갱신 주기는 Codex 15초, Claude·Gemini는 15초마다 읽고 페이지는 5분마다 새로 고친다. Antigravity는 앱이 떠 있으면 1분, 서버를
 직접 띄워야 하면 10분으로 스스로 늦춘다. 왼쪽 아래 톱니바퀴 → `전체 새로고침`은 주기와
 무관하게 즉시 읽는다.
 
@@ -415,7 +417,7 @@ py -m pip install pytest
 py -m pytest -q
 ```
 
-116개다. 검증기(주입 페이로드 거부, 거짓 시계 무시), 저장소(재적재), 브리지(토큰 / Host /
+121개다. 검증기(주입 페이로드 거부, 거짓 시계 무시), 저장소(재적재), 브리지(토큰 / Host /
 Origin 거부), Codex CLI 탐색, 페이지 리더(Node로 실제 실행, 없으면 건너뜀), 조회용 브라우저
 플래그, 그리고 Antigravity 쪽이 가장 두껍다 — 서버 판별, 응답 해석의
 함정(빈 `quotaInfo`와 0의 차이, NaN), 루프백 강제와 리다이렉트 차단, 앱 없이 띄울 때의
@@ -455,9 +457,13 @@ Origin 거부), Codex CLI 탐색, 페이지 리더(Node로 실제 실행, 없으
 페이지를 반복해서 새로 불러왔거나 브라우저가 여러 번 강제 종료되면 이렇게 된다. 같은 플래그로
 새 프로필을 띄우면 바로 통과하는 것으로 확인했다.
 
-고치는 방법은 프로필을 버리는 것뿐이다. **트레이 아이콘 우클릭 → `Claude 연결 초기화`**.
-`accounts\claude\browser` 폴더를 지우고 처음부터 다시 로그인한다 (`AccountManager.reset`).
-로그인 한 번 다시 하는 비용으로 끝난다.
+고치는 방법은 프로필을 버리는 것뿐이다. 사용자가 이 상황을 알아채고 트레이 메뉴까지 찾아가길
+기대할 수는 없으니 앱이 알아챈다 (`ChallengeWatch`). `창 열기`로 창을 띄운 뒤 2분
+(`STUCK_AFTER_REVEAL_SECONDS`)이 지나도 확인이 남아 있거나, 수치를 한 번도 못 읽은 채 확인이
+3번(`STUCK_AFTER_CHECKS`) 다시 뜨면 `verify_stuck` 상태가 되고 카드 버튼이 **`다시 연결`**로
+바뀐다. 누르면 `accounts\claude\browser` 폴더를 지우고 바로 로그인 창을 연다
+(`Widget.reset_account` → `AccountManager.reset` + `connect`). 트레이 메뉴의 `Claude 다시 연결`도
+같은 동작이다. 열려 있던 창은 닫지 않으므로, 그 사이 확인이 통과되면 수치는 그대로 다시 들어온다.
 
 **로그가 필요하면** `%LOCALAPPDATA%\AIUsageBoard\runtime.log`를 본다. 헬퍼 프로세스가 죽은
 경우에만 기록된다.

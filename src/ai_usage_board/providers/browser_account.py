@@ -77,12 +77,26 @@ INTERSTITIAL_TITLES = (
 CHALLENGE_MARKERS = ("/api/challenge_redirect", "__cf_chl", "/cdn-cgi/challenge", "google.com/sorry/")
 
 #: How often the hidden usage page is reloaded so its numbers stay current.
-RELOAD_SECONDS = 60
+#: Every reload is a fresh trip through the site's bot protection, and a page
+#: reloaded on a tight, regular beat all day long looks like what it guards
+#: against. "전체 새로고침" still reloads at once.
+RELOAD_SECONDS = 300
+
+#: How often a signed-in tab that wandered off is steered back to usage.
+NUDGE_SECONDS = 60
 
 #: How long a bot check may sit there before the card asks the user for help.
 #: Most "Just a moment..." pages clear on their own within a few seconds.
 #: The window itself is never shown uninvited; the card offers "창 열기".
 CHALLENGE_GRACE_SECONDS = 20
+
+#: A ticked check clears within seconds. One still there this long after the
+#: user opened the window for it is not going to: the site has stopped
+#: trusting this browser profile, and only a fresh one gets out of it.
+STUCK_AFTER_REVEAL_SECONDS = 120
+
+#: Checks that keep coming back with not one reading in between mean the same.
+STUCK_AFTER_CHECKS = 3
 
 #: How long a page may stay untitled (still loading) before we read it anyway.
 LOADING_GRACE_SECONDS = 15
@@ -136,6 +150,48 @@ class ChallengePending(BrowserError):
     Not a failure to retry around: nothing we do helps, and reloading actively
     destroys the check the user is in the middle of.
     """
+
+
+class ChallengeWatch:
+    """Tells a bot check the user can click through from one that never lets go.
+
+    The second kind used to leave people ticking the same box over and over,
+    with the cure - throwing the profile away - hidden in the tray menu.
+    Spotting it lets the card offer that cure as one button.
+    """
+
+    def __init__(self) -> None:
+        #: When the check on screen now was first seen, or None.
+        self.since: Optional[float] = None
+        #: Separate checks seen since the last good reading.
+        self.count = 0
+        self._showing = False
+
+    def seen(self, now: float) -> None:
+        if not self._showing:
+            self._showing = True
+            self.count += 1
+        if self.since is None:
+            self.since = now
+
+    def gone(self) -> None:
+        """The page is past the check, though no numbers came of it yet."""
+        self._showing = False
+        self.since = None
+
+    def read(self) -> None:
+        """Numbers arrived: whatever happened before was a passing check."""
+        self.gone()
+        self.count = 0
+
+    def stuck(self, now: float, revealed_at: Optional[float]) -> bool:
+        if self.count >= STUCK_AFTER_CHECKS:
+            return True
+        if revealed_at is None or self.since is None:
+            return False
+        # Counted from whichever came later: a window opened long before this
+        # check appeared has not given the user any time with it yet.
+        return now - max(revealed_at, self.since) >= STUCK_AFTER_REVEAL_SECONDS
 
 
 def current_page(site: Site, session: BrowserSession) -> Optional[Dict[str, Any]]:
@@ -226,8 +282,7 @@ def run(
     last_reload = time.monotonic()
     failures = 0
     state = ""
-    #: When the current bot check was first seen, or None.
-    challenge_since: Optional[float] = None
+    watch = ChallengeWatch()
     #: When the reading browser was put on screen, or None while hidden.
     revealed_at: Optional[float] = None
     #: When the current page was first seen without a title (still loading).
@@ -283,7 +338,8 @@ def run(
                     final_reported = True
                     return
                 state = ""
-                challenge_since = revealed_at = untitled_since = None
+                watch = ChallengeWatch()
+                revealed_at = untitled_since = None
 
             show = int(instruction.get("show") or 0)
             if show > seen_show:
@@ -324,7 +380,7 @@ def run(
             now = time.monotonic()
             # While a check is pending or a page is loading, look more often
             # so the card catches up soon after it settles.
-            interval = 3 if (challenge_since is not None or untitled_since is not None) else 15
+            interval = 3 if (watch.since is not None or untitled_since is not None) else 15
             if not force and now - last_poll < interval:
                 session.keep_hidden()
                 time.sleep(0.4)
@@ -344,7 +400,8 @@ def run(
             # numbers are current - but never during a bot check: a reload
             # there restarts the check, and a debugger attached to it is what
             # makes the check come back forever.
-            if not checking and page is not None and on_usage_page(site, page) and now - last_reload > RELOAD_SECONDS:
+            due = force or now - last_reload > RELOAD_SECONDS
+            if not checking and page is not None and on_usage_page(site, page) and due:
                 last_reload = now
                 with contextlib.suppress(Exception):
                     session.call("Page.reload", page=page)
@@ -376,13 +433,17 @@ def run(
                 snapshot = extract_usage(site, session, expression)
             except ChallengePending:
                 failures = 0
-                if challenge_since is None:
-                    challenge_since = now
+                watch.seen(now)
                 # Give the check a chance to clear by itself before involving
                 # the user, then only say so on the card. The window stays
                 # hidden: a browser that pops up uninvited is worse than a
                 # card asking for one click on "창 열기".
-                if now - challenge_since >= CHALLENGE_GRACE_SECONDS:
+                if watch.stuck(now, revealed_at):
+                    # Ticking will not help any more; the card offers a fresh
+                    # profile instead. The open window stays: a check that
+                    # does clear after all still brings the numbers back.
+                    set_state("verify_stuck", "BotCheckLoop")
+                elif now - watch.since >= CHALLENGE_GRACE_SECONDS:
                     set_state("verify_required", "BotCheck")
                 continue
             except BrowserError as error:
@@ -399,8 +460,9 @@ def run(
                 continue
 
             failures = 0
-            challenge_since = None
+            watch.gone()
             if snapshot and snapshot.get("windows"):
+                watch.read()
                 publish(snapshot)
                 set_state("connected")
                 with contextlib.suppress(OSError):
@@ -416,7 +478,7 @@ def run(
                 # Nudge a signed-in-but-wrong-page tab back to the usage view.
                 # Only from a page it is safe to leave: navigating away from a
                 # login form or a bot check throws away the user's work.
-                if now - last_reload > RELOAD_SECONDS:
+                if now - last_reload > NUDGE_SECONDS:
                     last_reload = now
                     _navigate_to_usage(site, session)
     finally:

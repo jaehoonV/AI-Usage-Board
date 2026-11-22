@@ -372,8 +372,8 @@ class Widget:
                 ("열기", lambda: self.root.after(0, self.reveal)),
                 ("전체 새로고침", lambda: self.root.after(0, self.refresh_all)),
                 ("-", lambda: None),
-                ("Claude 연결 초기화", lambda: self.root.after(0, lambda: self.reset_account("claude"))),
-                ("Gemini 연결 초기화", lambda: self.root.after(0, lambda: self.reset_account("gemini"))),
+                ("Claude 다시 연결", lambda: self.root.after(0, lambda: self.reset_account("claude"))),
+                ("Gemini 다시 연결", lambda: self.root.after(0, lambda: self.reset_account("gemini"))),
                 ("-", lambda: None),
                 ("종료", lambda: self.root.after(0, self.close)),
             ],
@@ -819,17 +819,33 @@ class Widget:
         self.store.fail(provider, "사용량 화면을 여는 중…", source="account", error_type="starting")
         self.rendered.pop(provider, None)
 
+    def _needs_fresh_start(self, provider: str, account_state: str) -> bool:
+        """Only a new browser profile gets this account going again."""
+        if account_state == "verify_stuck":
+            return True
+        if account_state == "engine_error":
+            with contextlib.suppress(Exception):
+                return self.accounts.errors().get(provider) == "BrowserExited"
+        return False
+
     def reset_account(self, provider: str) -> None:
-        """Discard the saved browser profile for a service and reconnect.
+        """Start the account over: fresh browser profile, straight to sign-in.
 
         The way out of a bot check that has latched onto one profile and keeps
-        challenging it forever.
+        challenging it forever. One step for the user - "다시 연결" - instead
+        of resetting in the tray and then finding "계정 연결" on the card.
         """
-        with contextlib.suppress(Exception):
-            self.accounts.reset(provider)
-        self.store.fail(provider, "계정 연결 필요", source="account", error_type="login_required")
+        self.store.fail(provider, "로그인 창을 여는 중…", source="account", error_type="starting")
         self.rendered.pop(provider, None)
         self.reveal()
+
+        def work() -> None:
+            # Closing the old helper can take seconds; not on the Tk thread.
+            with contextlib.suppress(Exception):
+                self.accounts.reset(provider)
+                self.accounts.connect(provider)
+
+        threading.Thread(target=work, daemon=True, name=f"{provider}-reconnect").start()
 
     # ------------------------------------------------------------------
     # rendering
@@ -867,6 +883,8 @@ class Widget:
                 action, handler = "로그인 완료", self.confirm_login
             elif account_state == "verify_required":
                 action, handler = "창 열기", self.connect_account
+            elif self._needs_fresh_start(key, account_state):
+                action, handler = "다시 연결", self.reset_account
             elif not windows and account_state != "connected":
                 action, handler = "계정 연결", self.connect_account
             else:
@@ -950,7 +968,7 @@ class Widget:
             # The numbers above are the last good reading; say why they are
             # not updating instead of leaving only a button to guess from.
             text = f"{error}{tail}"
-            waiting = account_state in ("verify_required", "login_manual", "starting", "login_required")
+            waiting = account_state in ("verify_required", "verify_stuck", "login_manual", "starting", "login_required")
             waiting = waiting or data.get("errorType") == "not_running"
             color = palette.muted if waiting else palette.crit
         if text:

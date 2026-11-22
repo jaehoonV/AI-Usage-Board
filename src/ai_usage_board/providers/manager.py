@@ -27,6 +27,9 @@ STATES = (
     "engine_error",
     "login_required",
     "verify_required",
+    #: A bot check that keeps coming back however often it is ticked; the
+    #: card offers to start over with a fresh profile.
+    "verify_stuck",
     #: Sign-in browser is open with no DevTools port; waiting for the user to
     #: say they are done.
     "login_manual",

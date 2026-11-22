@@ -83,3 +83,60 @@ def test_every_managed_account_uses_the_browser_helper():
     for provider in manager.MANAGED:
         command = manager._helper_command(provider, hidden=True)
         assert command[-3:] == ["--account-window", provider, "--hidden"]
+
+
+def test_a_check_that_clears_by_itself_is_not_stuck():
+    from ai_usage_board.providers.browser_account import ChallengeWatch
+
+    watch = ChallengeWatch()
+    watch.seen(0)
+    assert not watch.stuck(10, revealed_at=None)
+    watch.read()
+    assert watch.count == 0 and watch.since is None
+
+
+def test_a_check_left_on_screen_after_opening_the_window_is_stuck():
+    from ai_usage_board.providers.browser_account import STUCK_AFTER_REVEAL_SECONDS, ChallengeWatch
+
+    watch = ChallengeWatch()
+    watch.seen(0)
+    # Sitting hidden is just waiting for the user, however long it takes.
+    assert not watch.stuck(10_000, revealed_at=None)
+    # Once they opened the window, it gets its time from that moment on.
+    revealed = 5_000
+    assert not watch.stuck(revealed + STUCK_AFTER_REVEAL_SECONDS - 1, revealed_at=revealed)
+    assert watch.stuck(revealed + STUCK_AFTER_REVEAL_SECONDS, revealed_at=revealed)
+
+
+def test_a_check_newer_than_the_window_gets_its_own_time():
+    from ai_usage_board.providers.browser_account import STUCK_AFTER_REVEAL_SECONDS, ChallengeWatch
+
+    watch = ChallengeWatch()
+    watch.seen(1_000)  # appeared long after the window was opened at 0
+    assert not watch.stuck(1_000 + STUCK_AFTER_REVEAL_SECONDS - 1, revealed_at=0)
+
+
+def test_checks_that_keep_coming_back_are_stuck():
+    from ai_usage_board.providers.browser_account import STUCK_AFTER_CHECKS, ChallengeWatch
+
+    watch = ChallengeWatch()
+    for moment in range(STUCK_AFTER_CHECKS):
+        assert not watch.stuck(moment, revealed_at=None)
+        watch.seen(moment)
+        watch.seen(moment + 0.5)  # the same check, polled again
+        if moment < STUCK_AFTER_CHECKS - 1:
+            watch.gone()  # passed, but no numbers followed
+    assert watch.count == STUCK_AFTER_CHECKS
+    assert watch.stuck(STUCK_AFTER_CHECKS, revealed_at=None)
+    # One good reading wipes the slate.
+    watch.read()
+    assert not watch.stuck(STUCK_AFTER_CHECKS + 1, revealed_at=None)
+
+
+def test_stuck_is_a_state_the_manager_and_bridge_know():
+    from ai_usage_board.bridge.server import _ACCOUNT_MESSAGES
+
+    accounts = manager.AccountManager()
+    accounts.set_status("claude", "verify_stuck", "BotCheckLoop")
+    assert accounts.status()["claude"] == "verify_stuck"
+    assert "다시 연결" in _ACCOUNT_MESSAGES["verify_stuck"]
