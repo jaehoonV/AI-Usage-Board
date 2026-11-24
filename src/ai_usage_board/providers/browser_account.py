@@ -36,6 +36,13 @@ class Site:
     safe_to_leave: Tuple[str, ...]
     #: Claude can route the usage page through a hash (``/#settings/usage``).
     hash_route: bool = False
+    #: Keep the reader shown beyond the desktop's edge instead of hidden.
+    #: claude.ai needs it: a hidden page cannot get through its Cloudflare
+    #: check, and the failed retries pile up until the profile is distrusted.
+    #: A shown page keeps painting, though - gemini.google.com/usage burns
+    #: about a tenth of a core and some GPU that way - so a site without
+    #: that check stays properly hidden.
+    park_visible: bool = False
 
     @property
     def usage_url(self) -> str:
@@ -51,6 +58,7 @@ SITES: Dict[str, Site] = {
         signed_out=(("claude.ai", "/login"),),
         safe_to_leave=("", "/", "/new", "/chats", "/recents"),
         hash_route=True,
+        park_visible=True,
     ),
     "gemini": Site(
         provider="gemini",
@@ -235,11 +243,8 @@ def extract_usage(site: Site, session: BrowserSession, expression: str) -> Optio
     if not on_usage_page(site, page):
         return None
 
-    result = session.call(
-        "Runtime.evaluate",
-        {"expression": expression, "returnByValue": True, "awaitPromise": False},
-        page=page,
-    )
+    # In a world of its own: the page never sees the reader or its globals.
+    result = session.evaluate_isolated(expression, page)
     if "exceptionDetails" in result:
         raise BrowserError("UsageExtractorFailed")
     return (result.get("result") or {}).get("value")
@@ -289,7 +294,7 @@ def run(
     untitled_since: Optional[float] = None
 
     def open_session(for_phase: str) -> BrowserSession:
-        new = BrowserSession(profile)
+        new = BrowserSession(profile, park_visible=site.park_visible)
         new.start(
             # The reading browser is infrastructure, not something to look at:
             # always hidden, whatever triggered the connect. Only the sign-in

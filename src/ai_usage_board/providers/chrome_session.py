@@ -13,13 +13,14 @@ Design rules enforced here:
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from urllib.parse import urlparse
 from urllib.request import ProxyHandler, build_opener
 
@@ -113,11 +114,81 @@ def validate_socket(address: str, port: int) -> str:
     return address
 
 
+Rect = Tuple[int, int, int, int]
+
+#: How far past the desktop's left edge a parked reader window sits.
+PARK_MARGIN = 200
+
+
+def is_browser_frame(style: int) -> bool:
+    """A top-level browser frame, as opposed to a menu, tooltip or dropdown."""
+    caption = BrowserSession.WS_CAPTION
+    return not style & BrowserSession.WS_POPUP and style & caption == caption
+
+
+def overlaps(rect: Rect, area: Rect) -> bool:
+    """True if any part of ``rect`` lies inside ``area`` (left, top, right, bottom)."""
+    return rect[0] < area[2] and rect[2] > area[0] and rect[1] < area[3] and rect[3] > area[1]
+
+
+def parking_spot(desktop: Rect, width: int) -> Tuple[int, int]:
+    """Top-left corner that puts a ``width``-wide window wholly left of the desktop.
+
+    The desktop is every monitor together and need not start at (0, 0): a
+    monitor left of the primary one has negative x.
+    """
+    return desktop[0] - width - PARK_MARGIN, desktop[1]
+
+
+def _virtual_screen() -> Rect:
+    import ctypes
+
+    metric = ctypes.windll.user32.GetSystemMetrics
+    left, top = metric(76), metric(77)  # SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN
+    return left, top, left + metric(78), top + metric(79)  # SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
+
+
+def _default_home(width: int, height: int) -> Rect:
+    """Somewhere sensible on the primary monitor's work area.
+
+    In workspace coordinates - relative to the work area, which is what a
+    window placement uses for a window that is not a tool window.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    area = wintypes.RECT(0, 0, 1280, 800)
+    with contextlib.suppress(Exception):
+        ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(area), 0)  # SPI_GETWORKAREA
+    width = max(400, min(width, area.right - area.left - 80))
+    height = max(300, min(height, area.bottom - area.top - 60))
+    return 80, 40, 80 + width, 40 + height
+
+
+if os.name == "nt":
+    import ctypes as _ctypes
+    from ctypes import wintypes as _wintypes
+
+    class _Placement(_ctypes.Structure):
+        _fields_ = [
+            ("length", _wintypes.UINT),
+            ("flags", _wintypes.UINT),
+            ("showCmd", _wintypes.UINT),
+            ("ptMinPosition", _wintypes.POINT),
+            ("ptMaxPosition", _wintypes.POINT),
+            ("rcNormalPosition", _wintypes.RECT),
+        ]
+
+
 class BrowserSession:
     """Owns one browser process and its DevTools connection."""
 
-    def __init__(self, profile: Path) -> None:
+    def __init__(self, profile: Path, *, park_visible: bool = True) -> None:
         self.profile = Path(profile)
+        #: Keep the reader *shown* beyond the desktop's edge (see "keeping the
+        #: reader out of sight") rather than hidden with SW_HIDE. A shown page
+        #: keeps painting, so this is for sites whose bot check needs it.
+        self.park_visible = park_visible
         self.process: Optional[subprocess.Popen] = None
         self.port = 0
         self.socket_url = ""
@@ -125,6 +196,8 @@ class BrowserSession:
         self.debug = True
         #: True once the reading browser has been taken off the screen.
         self.hidden = False
+        #: Where each parked window stood before, to put it back on "창 열기".
+        self._home: Dict[int, Rect] = {}
         # Never let a system proxy intercept a loopback DevTools call.
         self.http = build_opener(ProxyHandler({}))
 
@@ -149,18 +222,75 @@ class BrowserSession:
         with contextlib.suppress(OSError):
             preferences.write_text(json.dumps(data), encoding="utf-8")
 
-    SW_HIDE, SW_SHOW, SW_RESTORE = 0, 5, 9
+    # -- keeping the reader out of sight ----------------------------------
+    #
+    # The reading browser is machinery; the user asked for a usage widget,
+    # not a second browser. It used to be hidden with SW_HIDE (and the user
+    # sometimes minimised it). Both make Chrome mark the page hidden, and a
+    # hidden page cannot get through a Cloudflare check: Turnstile never
+    # finishes, retries every two minutes and every retry counts against the
+    # profile, until the site stops trusting it at all - the "보안 확인이 계속
+    # 반복" loop. A history of one such profile showed exactly that: one
+    # check, then five hours of retries two minutes apart.
+    #
+    # So the window stays *shown*, but parked beyond the edge of the desktop
+    # and dropped from the taskbar and Alt+Tab (WS_EX_TOOLWINDOW). To the
+    # page it is an ordinary visible tab - --disable-backgrounding-occluded-
+    # windows keeps Chrome from treating an unseen window as hidden - so a
+    # check clears on its own, the way it does in any browser left open.
 
-    def _apply_window_state(self, action: int) -> int:
-        """ShowWindow(action) on every browser window of this process."""
-        if os.name != "nt" or self.process is None or self.process.poll() is not None:
-            return 0
+    SW_HIDE, SW_SHOWNORMAL, SW_SHOWNOACTIVATE = 0, 1, 4
+    GWL_STYLE, GWL_EXSTYLE = -16, -20
+    WS_POPUP, WS_CAPTION = 0x80000000, 0x00C00000
+    WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = 0x00000080, 0x00040000
+
+    @staticmethod
+    @functools.lru_cache(maxsize=1)
+    def _user32():
+        # Built once: keep_hidden() runs every 0.4 seconds.
         import ctypes
         from ctypes import wintypes
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)
+        # Chrome measures its windows in physical pixels (per-monitor aware).
+        # Unaware, this helper would see scaled coordinates, and on mixed-DPI
+        # monitors "is it parked?" could come out wrong every time - a window
+        # moved again and again. The helper has no UI of its own to blur.
+        with contextlib.suppress(Exception):
+            user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
+        long_ptr = ctypes.c_ssize_t
+        get_long = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        set_long = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+        get_long.argtypes, get_long.restype = [wintypes.HWND, ctypes.c_int], long_ptr
+        set_long.argtypes, set_long.restype = [wintypes.HWND, ctypes.c_int, long_ptr], long_ptr
+        user32.GetWindowPlacement.argtypes = [wintypes.HWND, ctypes.POINTER(_Placement)]
+        user32.SetWindowPlacement.argtypes = [wintypes.HWND, ctypes.POINTER(_Placement)]
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.IsIconic.argtypes = [wintypes.HWND]
+        user32.GetWindow.argtypes, user32.GetWindow.restype = [wintypes.HWND, wintypes.UINT], wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT,
+        ]
+        return user32, get_long, set_long
+
+    def _frames(self) -> List[int]:
+        """The browser's top-level frames: captioned, unowned, not popups.
+
+        Menus, tooltips and the omnibox dropdown share the window class but
+        are popups; showing one of those would put a stray box on screen.
+        """
+        if os.name != "nt" or self.process is None or self.process.poll() is not None:
+            return []
+        import ctypes
+        from ctypes import wintypes
+
+        user32, get_long, _set_long = self._user32()
         target = self.process.pid
-        touched = []
+        found: List[int] = []
 
         @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def visit(hwnd, _parameter):
@@ -170,40 +300,139 @@ class BrowserSession:
                 return True
             name = ctypes.create_unicode_buffer(64)
             user32.GetClassNameW(hwnd, name, 64)
-            # Only real browser frames. Chrome's helper windows stay as they
-            # are, so showing never pops a stray popup into view.
-            if name.value == "Chrome_WidgetWin_1":
-                user32.ShowWindow(hwnd, action)
-                touched.append(hwnd)
+            if name.value != "Chrome_WidgetWin_1" or user32.GetWindow(hwnd, 4):  # GW_OWNER
+                return True
+            style = get_long(hwnd, self.GWL_STYLE) & 0xFFFFFFFF
+            if is_browser_frame(style):
+                found.append(hwnd)
             return True
 
         with contextlib.suppress(Exception):
             user32.EnumWindows(visit, 0)
-        return len(touched)
+        return found
+
+    def _tucked(self, hwnd: int) -> bool:
+        import ctypes
+        from ctypes import wintypes
+
+        user32, get_long, _set_long = self._user32()
+        if not self.park_visible:
+            return not user32.IsWindowVisible(hwnd)
+        if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+            return False
+        if not get_long(hwnd, self.GWL_EXSTYLE) & self.WS_EX_TOOLWINDOW:
+            return False
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        return not overlaps((rect.left, rect.top, rect.right, rect.bottom), _virtual_screen())
+
+    #: SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+    _RESTYLED = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
+
+    def _tuck(self, hwnd: int) -> None:
+        """Shown, unminimised, beyond the desktop's edge, off the taskbar."""
+        import ctypes
+
+        user32, get_long, set_long = self._user32()
+        if not self.park_visible:
+            user32.ShowWindow(hwnd, self.SW_HIDE)
+            return
+        placement = _Placement()
+        placement.length = ctypes.sizeof(_Placement)
+        if not user32.GetWindowPlacement(hwnd, ctypes.byref(placement)):
+            return
+        normal = placement.rcNormalPosition
+        bounds = (normal.left, normal.top, normal.right, normal.bottom)
+        if hwnd not in self._home and overlaps(bounds, _virtual_screen()):
+            self._home[hwnd] = bounds
+        width, height = max(400, bounds[2] - bounds[0]), max(300, bounds[3] - bounds[1])
+
+        extended = get_long(hwnd, self.GWL_EXSTYLE) & 0xFFFFFFFF
+        wanted = (extended | self.WS_EX_TOOLWINDOW) & ~self.WS_EX_APPWINDOW
+        if extended != wanted:
+            # The taskbar only notices a style change across hide and show.
+            user32.ShowWindow(hwnd, self.SW_HIDE)
+            set_long(hwnd, self.GWL_EXSTYLE, wanted)
+            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, self._RESTYLED)
+
+        left, top = parking_spot(_virtual_screen(), width)
+        placement.flags = 0
+        placement.showCmd = self.SW_SHOWNOACTIVATE  # also lifts a minimised window
+        placement.rcNormalPosition.left, placement.rcNormalPosition.top = left, top
+        placement.rcNormalPosition.right, placement.rcNormalPosition.bottom = left + width, top + height
+        user32.SetWindowPlacement(hwnd, ctypes.byref(placement))
+
+    def _bring_home(self, hwnd: int, show: int) -> None:
+        """Undo :meth:`_tuck`: back on the desktop and the taskbar."""
+        import ctypes
+
+        user32, get_long, set_long = self._user32()
+        if not self.park_visible:
+            user32.ShowWindow(hwnd, show)  # a hidden window kept its place
+            return
+        placement = _Placement()
+        placement.length = ctypes.sizeof(_Placement)
+        if not user32.GetWindowPlacement(hwnd, ctypes.byref(placement)):
+            return
+        normal = placement.rcNormalPosition
+        width, height = normal.right - normal.left, normal.bottom - normal.top
+        home = self._home.get(hwnd)
+        if home is None or not overlaps(home, _virtual_screen()):
+            # Never remembered, or its monitor has since been unplugged:
+            # "창 열기" must put the window somewhere the user can see it.
+            home = _default_home(width, height)
+
+        extended = get_long(hwnd, self.GWL_EXSTYLE) & 0xFFFFFFFF
+        if extended & self.WS_EX_TOOLWINDOW:
+            user32.ShowWindow(hwnd, self.SW_HIDE)
+            set_long(hwnd, self.GWL_EXSTYLE, extended & ~self.WS_EX_TOOLWINDOW)
+            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, self._RESTYLED)
+        placement.flags = 0
+        placement.showCmd = show
+        (placement.rcNormalPosition.left, placement.rcNormalPosition.top,
+         placement.rcNormalPosition.right, placement.rcNormalPosition.bottom) = home
+        user32.SetWindowPlacement(hwnd, ctypes.byref(placement))
 
     def hide(self, timeout: float = 10.0) -> None:
-        """Take the browser off the screen entirely - taskbar included.
-
-        The reading browser is machinery; the user asked for a usage widget,
-        not a second browser. SW_HIDE removes the window completely while the
-        process keeps running, which is what CDP needs.
-        """
+        """Put the reading browser out of sight (see the note above)."""
         self.hidden = True
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self._apply_window_state(self.SW_HIDE):
+            frames = self._frames()
+            if frames:
+                for hwnd in frames:
+                    with contextlib.suppress(Exception):
+                        self._tuck(hwnd)
                 return
             time.sleep(0.3)
 
     def keep_hidden(self) -> None:
-        """Re-hide windows Chrome creates or re-shows while we are not looking."""
-        if self.hidden:
-            self._apply_window_state(self.SW_HIDE)
+        """Re-park windows Chrome creates, restores or moves back on screen."""
+        if not self.hidden:
+            return
+        for hwnd in self._frames():
+            with contextlib.suppress(Exception):
+                if not self._tucked(hwnd):
+                    self._tuck(hwnd)
 
     def reveal(self) -> None:
         self.hidden = False
-        self._apply_window_state(self.SW_SHOW)
-        self._apply_window_state(self.SW_RESTORE)
+        for hwnd in self._frames():
+            with contextlib.suppress(Exception):
+                self._bring_home(hwnd, self.SW_SHOWNORMAL)
+
+    def _send_home_quietly(self) -> None:
+        """Before closing: leave a sensible window position in the profile.
+
+        Chrome saves where its window was. The next time this profile opens
+        it is as the sign-in window, which should not start out past the
+        edge of the desktop.
+        """
+        if not self.hidden or not self.park_visible:
+            return
+        for hwnd in self._frames():
+            with contextlib.suppress(Exception):
+                self._bring_home(hwnd, self.SW_HIDE)
 
     def start(self, *, minimized: bool, landing: str, debug: bool = True) -> None:
         self.profile.mkdir(parents=True, exist_ok=True)
@@ -286,6 +515,8 @@ class BrowserSession:
         # Always ask politely first. A clean exit is what flushes cookies to
         # the profile, and the sign-in they just completed lives in those
         # cookies - killing the process here would throw the login away.
+        with contextlib.suppress(Exception):
+            self._send_home_quietly()
         if self.debug:
             with contextlib.suppress(Exception):
                 self.call("Browser.close")
@@ -340,24 +571,60 @@ class BrowserSession:
         return [p for p in payload if isinstance(p, dict) and p.get("type") == "page"]
 
     def call(self, method: str, params: Optional[Dict[str, Any]] = None, page: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        with self._conversation(page) as ask:
+            return ask(method, params)
+
+    def evaluate_isolated(self, expression: str, page: Dict[str, Any]) -> Dict[str, Any]:
+        """Run ``expression`` in a world of its own on ``page``'s main frame.
+
+        The DOM is shared, the JavaScript is not: the page cannot see our
+        code, the globals it leaves behind, or our calls through DOM methods
+        it may have wrapped. Run in the page's own world, the reader used to
+        leave ``window.AIUsageBoardReader`` there every 15 seconds - exactly
+        the kind of stray global a bot check looks for.
+        """
+        with self._conversation(page) as ask:
+            tree = ask("Page.getFrameTree")
+            frame_id = ((tree.get("frameTree") or {}).get("frame") or {}).get("id")
+            if not isinstance(frame_id, str) or not frame_id:
+                raise BrowserError("FrameNotFound")
+            world = ask("Page.createIsolatedWorld", {"frameId": frame_id, "worldName": "reader"})
+            context = world.get("executionContextId")
+            if not isinstance(context, int):
+                raise BrowserError("IsolatedWorldFailed")
+            return ask(
+                "Runtime.evaluate",
+                {"expression": expression, "contextId": context, "returnByValue": True, "awaitPromise": False},
+            )
+
+    @contextlib.contextmanager
+    def _conversation(self, page: Optional[Dict[str, Any]]) -> Iterator[Callable[..., Dict[str, Any]]]:
+        """One short DevTools connection carrying one or more commands."""
         address = validate_socket(
             (page or {}).get("webSocketDebuggerUrl") or self.socket_url, self.port
         )
         # No Origin header is sent, which is what Chrome wants from a
         # non-browser DevTools client.
         connection: Optional[WebSocket] = None
-        try:
-            connection = WebSocket(address, timeout=5)
-            connection.send_json({"id": 1, "method": method, "params": params or {}})
+        counter = [0]
+
+        def ask(method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            counter[0] += 1
+            message_id = counter[0]
+            connection.send_json({"id": message_id, "method": method, "params": params or {}})
             deadline = time.monotonic() + 8
             while time.monotonic() < deadline:
                 reply = connection.recv_json()
-                if reply.get("id") != 1:
+                if reply.get("id") != message_id:
                     continue  # an event arrived first
                 if "error" in reply:
                     raise BrowserError("BrowserCommandFailed")
                 return reply.get("result") or {}
             raise BrowserError("BrowserReplyTimeout")
+
+        try:
+            connection = WebSocket(address, timeout=5)
+            yield ask
         except WebSocketError as error:
             raise BrowserError(f"BrowserSocket:{error}") from error
         except (TimeoutError, socket.timeout) as error:

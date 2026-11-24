@@ -2,6 +2,7 @@ from ai_usage_board.providers import manager
 from ai_usage_board.providers.browser_account import (
     SITES,
     build_expression,
+    extract_usage,
     is_challenge,
     is_signed_out,
     on_usage_page,
@@ -58,7 +59,7 @@ def test_a_browser_that_cannot_start_keeps_its_reason(tmp_path, monkeypatch):
     from ai_usage_board.providers.chrome_session import BrowserError
 
     class Missing:
-        def __init__(self, _profile):
+        def __init__(self, _profile, **_options):
             pass
 
         def start(self, **_kwargs):
@@ -140,3 +141,39 @@ def test_stuck_is_a_state_the_manager_and_bridge_know():
     accounts.set_status("claude", "verify_stuck", "BotCheckLoop")
     assert accounts.status()["claude"] == "verify_stuck"
     assert "다시 연결" in _ACCOUNT_MESSAGES["verify_stuck"]
+
+
+class IsolatedSession:
+    """Stands in for BrowserSession: the reader must run through evaluate_isolated."""
+
+    def __init__(self):
+        self.evaluated = []
+
+    def pages(self):
+        return [{
+            "url": "https://claude.ai/settings/usage",
+            "title": "Claude",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/x",
+        }]
+
+    def evaluate_isolated(self, expression, page):
+        self.evaluated.append((expression, page))
+        return {"result": {"value": {"windows": [1]}}}
+
+    def call(self, *_args, **_kwargs):
+        raise AssertionError("the reader must not run in the page's own world")
+
+
+def test_usage_reader_runs_in_an_isolated_world():
+    session = IsolatedSession()
+    value = extract_usage(CLAUDE, session, "expr")
+    assert value == {"windows": [1]}
+    assert [expression for expression, _page in session.evaluated] == ["expr"]
+    assert session.evaluated[0][1]["url"] == "https://claude.ai/settings/usage"
+
+
+def test_only_claude_keeps_its_reader_shown_off_screen():
+    # claude.ai's Cloudflare check cannot finish in a hidden page; Gemini has
+    # no such check, and a shown page keeps painting for nothing.
+    assert SITES["claude"].park_visible
+    assert not SITES["gemini"].park_visible
