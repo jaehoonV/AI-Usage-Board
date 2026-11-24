@@ -53,7 +53,8 @@ def find_browser() -> Path:
 
 
 def browser_command(
-    executable: Path, profile: Path, landing: str, *, minimized: bool, debug: bool = True
+    executable: Path, profile: Path, landing: str, *, minimized: bool, debug: bool = True,
+    offscreen: bool = False,
 ) -> List[str]:
     """Build the launch line.
 
@@ -82,6 +83,13 @@ def browser_command(
             "--disable-backgrounding-occluded-windows",
         ]
         disabled_features.append("IntensiveWakeUpThrottling")
+    elif offscreen:
+        # A port-less window parked past the desktop's edge to get through a
+        # bot check. Unseen, Chrome would count it occluded and hide the page,
+        # and a hidden page never finishes the check. Measured: without this
+        # flag the parked page is "hidden" with animation frames stopped;
+        # with it, "visible" at 60 frames a second. Nothing a page can see.
+        command.append("--disable-backgrounding-occluded-windows")
     # One flag: Chrome honours only the last --disable-features it is given.
     command.append("--disable-features=" + ",".join(disabled_features))
     # Deliberately NOT passing --disable-blink-features=AutomationControlled.
@@ -219,6 +227,14 @@ class BrowserSession:
             return
         profile_section["exit_type"] = "Normal"
         profile_section["exited_cleanly"] = True
+        # No "translate this page?" bubble. Cloudflare's check page is in
+        # English, and with the reader parked off screen Chrome pulled the
+        # bubble onto the user's desktop on its own. A translated check page
+        # is a rewritten one, too - nothing a bot check should have to face.
+        translate = data.get("translate")
+        if not isinstance(translate, dict):
+            translate = data["translate"] = {}
+        translate["enabled"] = False
         with contextlib.suppress(OSError):
             preferences.write_text(json.dumps(data), encoding="utf-8")
 
@@ -272,16 +288,19 @@ class BrowserSession:
         user32.GetWindow.argtypes, user32.GetWindow.restype = [wintypes.HWND, wintypes.UINT], wintypes.HWND
         user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
         user32.SetWindowPos.argtypes = [
             wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT,
         ]
         return user32, get_long, set_long
 
-    def _frames(self) -> List[int]:
+    def _frames(self, *, strays: bool = False) -> List[int]:
         """The browser's top-level frames: captioned, unowned, not popups.
 
         Menus, tooltips and the omnibox dropdown share the window class but
         are popups; showing one of those would put a stray box on screen.
+        With ``strays=True`` it returns the opposite: those popups and
+        bubbles, as long as they are on screen.
         """
         if os.name != "nt" or self.process is None or self.process.poll() is not None:
             return []
@@ -300,10 +319,14 @@ class BrowserSession:
                 return True
             name = ctypes.create_unicode_buffer(64)
             user32.GetClassNameW(hwnd, name, 64)
-            if name.value != "Chrome_WidgetWin_1" or user32.GetWindow(hwnd, 4):  # GW_OWNER
+            if name.value != "Chrome_WidgetWin_1":
                 return True
             style = get_long(hwnd, self.GWL_STYLE) & 0xFFFFFFFF
-            if is_browser_frame(style):
+            frame = not user32.GetWindow(hwnd, 4) and is_browser_frame(style)  # GW_OWNER
+            if not strays:
+                if frame:
+                    found.append(hwnd)
+            elif not frame and user32.IsWindowVisible(hwnd):
                 found.append(hwnd)
             return True
 
@@ -414,6 +437,14 @@ class BrowserSession:
             with contextlib.suppress(Exception):
                 if not self._tucked(hwnd):
                     self._tuck(hwnd)
+        if self.park_visible:
+            # A parked window's bubbles (translate, permissions, downloads)
+            # are placed by Chrome where they fit on a monitor - that is, on
+            # the user's desktop, anchored to nothing they can see.
+            user32, _get_long, _set_long = self._user32()
+            for hwnd in self._frames(strays=True):
+                with contextlib.suppress(Exception):
+                    user32.ShowWindow(hwnd, self.SW_HIDE)
 
     def reveal(self) -> None:
         self.hidden = False
@@ -434,7 +465,7 @@ class BrowserSession:
             with contextlib.suppress(Exception):
                 self._bring_home(hwnd, self.SW_HIDE)
 
-    def start(self, *, minimized: bool, landing: str, debug: bool = True) -> None:
+    def start(self, *, minimized: bool, landing: str, debug: bool = True, offscreen: bool = False) -> None:
         self.profile.mkdir(parents=True, exist_ok=True)
         port_file = self.profile / "DevToolsActivePort"
         with contextlib.suppress(OSError):
@@ -452,7 +483,9 @@ class BrowserSession:
             startup_info.wShowWindow = 7 if minimized else 1  # SW_SHOWMINNOACTIVE / SW_NORMAL
 
         self.process = subprocess.Popen(
-            browser_command(find_browser(), self.profile, landing, minimized=minimized, debug=debug),
+            browser_command(
+                find_browser(), self.profile, landing, minimized=minimized, debug=debug, offscreen=offscreen,
+            ),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -532,7 +565,13 @@ class BrowserSession:
         self.socket_url = ""
 
     def _close_windows(self) -> None:
-        """Close a port-less browser the way the user would: WM_CLOSE."""
+        """Close a port-less browser the way the user would: WM_CLOSE.
+
+        Sent to every browser frame, shown or not. A parked window is hidden
+        and moved home just before this (:meth:`_send_home_quietly`); asking
+        only visible windows would ask nobody, and the forced stop that
+        follows would lose the cookies this window was opened to earn.
+        """
         if os.name != "nt" or self.process is None:
             return
         import ctypes
@@ -540,21 +579,27 @@ class BrowserSession:
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-        target = self.process.pid
+        for hwnd in self._frames():
+            with contextlib.suppress(Exception):
+                user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
 
-        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-        def visit(hwnd, _parameter):
-            owner = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-            if owner.value == target and user32.IsWindowVisible(hwnd):
-                name = ctypes.create_unicode_buffer(64)
-                user32.GetClassNameW(hwnd, name, 64)
-                if name.value == "Chrome_WidgetWin_1":
-                    user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
-            return True
+    def frame_title(self) -> str:
+        """The browser window's title - the page title, then the browser name.
 
-        with contextlib.suppress(Exception):
-            user32.EnumWindows(visit, 0)
+        The one thing a port-less browser tells us about its page.
+        """
+        if os.name != "nt":
+            return ""
+        import ctypes
+
+        user32, _get_long, _set_long = self._user32()
+        for hwnd in self._frames():
+            buffer = ctypes.create_unicode_buffer(512)
+            with contextlib.suppress(Exception):
+                user32.GetWindowTextW(hwnd, buffer, 512)
+                if buffer.value:
+                    return buffer.value
+        return ""
 
     @property
     def alive(self) -> bool:

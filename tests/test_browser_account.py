@@ -177,3 +177,115 @@ def test_only_claude_keeps_its_reader_shown_off_screen():
     # no such check, and a shown page keeps painting for nothing.
     assert SITES["claude"].park_visible
     assert not SITES["gemini"].park_visible
+
+
+# -- clearing a bot check in a port-less browser --------------------------
+
+
+def test_window_title_tells_check_from_settled_page():
+    from ai_usage_board.providers.browser_account import title_state
+
+    assert title_state(CLAUDE, "잠시만 기다리십시오… - Chrome") == "checking"
+    assert title_state(CLAUDE, "Just a moment... - Google Chrome") == "checking"
+    assert title_state(CLAUDE, "새 채팅 - Claude - Chrome") == "settled"
+    # Still loading: Chrome shows the address, which also says "claude".
+    assert title_state(CLAUDE, "claude.ai/settings/usage - Chrome") == "loading"
+    assert title_state(CLAUDE, "") == "loading"
+
+
+def test_only_claude_clears_checks_without_a_port():
+    assert CLAUDE.settled_title
+    assert GEMINI.settled_title is None
+
+
+class FakeBrowser:
+    """One browser launch: a reader stuck on a check, or a port-less window."""
+
+    launched = []
+
+    def __init__(self, _profile, **options):
+        self.options = options
+        self.closed = False
+        FakeBrowser.launched.append(self)
+
+    def start(self, **kwargs):
+        self.kwargs = kwargs
+
+    def hide(self, timeout=10.0):
+        pass
+
+    def keep_hidden(self):
+        pass
+
+    def bring_to_front(self):
+        pass
+
+    @property
+    def alive(self):
+        return not self.closed
+
+    def close(self):
+        self.closed = True
+
+    # reader
+    def pages(self):
+        return [{"url": "https://claude.ai/api/challenge_redirect?to=x", "title": "잠시만 기다리십시오…",
+                 "webSocketDebuggerUrl": "ws://127.0.0.1:1/devtools/page/x"}]
+
+    def call(self, *_args, **_kwargs):
+        raise AssertionError("nothing may be sent to a page during a check")
+
+    def evaluate_isolated(self, *_args, **_kwargs):
+        raise AssertionError("nothing may be sent to a page during a check")
+
+    # port-less window
+    def frame_title(self):
+        return "새 채팅 - Claude - Chrome"
+
+
+def run_until(tmp_path, monkeypatch, stop):
+    from ai_usage_board.providers import browser_account
+
+    FakeBrowser.launched = []
+    (tmp_path / "claude").mkdir()
+    (tmp_path / "claude" / "connected").write_text("1", encoding="ascii")
+    monkeypatch.setattr(browser_account, "ACCOUNTS_DIR", tmp_path)
+    monkeypatch.setattr(browser_account, "load_extractor", lambda: "")
+    monkeypatch.setattr(browser_account, "BrowserSession", FakeBrowser)
+    monkeypatch.setattr(browser_account, "CLEAR_AFTER_SECONDS", 0)
+    monkeypatch.setattr(browser_account, "CLEAR_SETTLE_SECONDS", 0)
+    monkeypatch.setattr(browser_account.time, "sleep", lambda _seconds: None)
+    reports = []
+    browser_account.run(
+        "claude",
+        report=lambda state, error="": reports.append(state),
+        publish=lambda _snapshot: None,
+        command=lambda: {"close": stop(reports)},
+        login_only=False,
+    )
+    return reports
+
+
+def test_a_check_the_reader_cannot_pass_goes_to_a_port_less_window(tmp_path, monkeypatch):
+    run_until(tmp_path, monkeypatch, lambda _reports: len(FakeBrowser.launched) >= 3)
+    reader, clearer, reader_again = FakeBrowser.launched[:3]
+    assert reader.kwargs["debug"] and not reader.kwargs["offscreen"]
+    # The check is handed to a browser with no DevTools port, parked off
+    # screen but awake, on the usage page.
+    assert not clearer.kwargs["debug"] and clearer.kwargs["offscreen"]
+    assert clearer.kwargs["landing"] == CLAUDE.usage_url
+    assert clearer.options["park_visible"]
+    # Once its title says the page settled, it is closed cleanly - the cookie
+    # it earned is written - and reading starts again.
+    assert reader.closed and clearer.closed
+    assert reader_again.kwargs["debug"]
+
+
+def test_a_check_that_keeps_coming_back_is_called_stuck(tmp_path, monkeypatch):
+    from ai_usage_board.providers.browser_account import STUCK_AFTER_CHECKS
+
+    reports = run_until(tmp_path, monkeypatch, lambda reports: "verify_stuck" in reports)
+    debug = [browser.kwargs["debug"] for browser in FakeBrowser.launched]
+    # reader, window, reader, window, ... then no more windows once stuck.
+    assert debug == [True, False] * (STUCK_AFTER_CHECKS - 1) + [True]
+    assert "verify_stuck" in reports

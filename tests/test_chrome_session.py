@@ -197,3 +197,23 @@ def test_isolated_evaluation_without_a_context_is_a_browser_error(monkeypatch):
     with pytest.raises(BrowserError, match="IsolatedWorldFailed"):
         session.evaluate_isolated("1", PAGE)
     assert ScriptedSocket.created[0].closed
+
+
+def test_profile_never_offers_to_translate(tmp_path):
+    # A parked reader's translate bubble landed on the user's desktop.
+    preferences = tmp_path / "Default" / "Preferences"
+    preferences.parent.mkdir(parents=True)
+    preferences.write_text('{"profile": {"exit_type": "Crashed"}, "translate": {"x": 1}}', encoding="utf-8")
+    BrowserSession(tmp_path)._mark_clean_exit()
+    data = __import__("json").loads(preferences.read_text(encoding="utf-8"))
+    assert data["translate"] == {"x": 1, "enabled": False}
+    assert data["profile"]["exit_type"] == "Normal"
+
+
+def test_port_less_check_window_stays_awake_off_screen_and_nothing_more():
+    command = browser_command(Path("chrome.exe"), Path("profile"), "https://claude.ai/settings/usage",
+                              minimized=True, debug=False, offscreen=True)
+    assert "--disable-backgrounding-occluded-windows" in command
+    assert not any(flag.startswith("--remote-debugging") for flag in command)
+    assert "--disable-renderer-backgrounding" not in command
+    assert "IntensiveWakeUpThrottling" not in features(command)

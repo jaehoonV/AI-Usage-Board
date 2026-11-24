@@ -43,6 +43,11 @@ class Site:
     #: about a tenth of a core and some GPU that way - so a site without
     #: that check stays properly hidden.
     park_visible: bool = False
+    #: A word every settled page of the site has in its title ("... - Claude").
+    #: Set for sites whose bot check is cleared in a port-less browser (see
+    #: :func:`run`, phase "clear"): that browser has no DevTools, so its
+    #: window title is all we can see of the page.
+    settled_title: Optional[str] = None
 
     @property
     def usage_url(self) -> str:
@@ -59,6 +64,7 @@ SITES: Dict[str, Site] = {
         safe_to_leave=("", "/", "/new", "/chats", "/recents"),
         hash_route=True,
         park_visible=True,
+        settled_title="Claude",
     ),
     "gemini": Site(
         provider="gemini",
@@ -106,6 +112,20 @@ STUCK_AFTER_REVEAL_SECONDS = 120
 #: Checks that keep coming back with not one reading in between mean the same.
 STUCK_AFTER_CHECKS = 3
 
+#: How long a check in the reading browser may sit before it is handed to a
+#: port-less browser instead. claude.ai's check never let the reader through
+#: on its own - it asked for a tick every time, about 14 minutes after each
+#: sign-in - while the port-less sign-in window always passed. Short, but
+#: long enough for a check that does clear by itself.
+CLEAR_AFTER_SECONDS = 8
+
+#: A port-less window's title must say "settled" this long before we trust it.
+CLEAR_SETTLE_SECONDS = 3
+
+#: How long the port-less window may work on a check alone before the card
+#: asks the user to tick it ("창 열기" then shows that window).
+CLEAR_ASK_AFTER_SECONDS = 45
+
 #: How long a page may stay untitled (still loading) before we read it anyway.
 LOADING_GRACE_SECONDS = 15
 
@@ -119,6 +139,20 @@ def is_challenge(page: Dict[str, Any]) -> bool:
     if any(marker in url for marker in CHALLENGE_MARKERS):
         return True
     return (page.get("title") or "").strip().lower() in INTERSTITIAL_TITLES
+
+
+def title_state(site: Site, title: str) -> str:
+    """What a port-less window's title says: "checking", "settled" or "loading".
+
+    Chrome titles the window "<page title> - Chrome", so the page title is
+    at the front. While a page loads the title is its address or empty.
+    """
+    text = (title or "").strip().lower()
+    if any(text.startswith(word) for word in INTERSTITIAL_TITLES):
+        return "checking"
+    if site.settled_title and site.settled_title.lower() in text and site.host not in text:
+        return "settled"
+    return "loading"
 
 
 def load_extractor() -> str:
@@ -268,6 +302,11 @@ def run(
       "로그인 완료"; we close it cleanly so the cookies land in the profile.
     * **read** - the same profile is reopened hidden *with* the port, and
       only the usage page is ever scripted.
+    * **clear** - a bot check the reader cannot pass. The reader is closed
+      and the profile reopened *without* the port, parked off screen, on the
+      usage page. We watch only its window title; once the site settles we
+      close it cleanly - the cookie that says "checked" is now in the
+      profile - and go back to reading. If it needs a tick, the card asks.
 
     ``report(state, error_type)`` and ``publish(snapshot)`` talk to the bridge;
     ``command()`` returns ``{"show": n, "refresh": n, "done": n, "close": bool}``
@@ -292,18 +331,24 @@ def run(
     revealed_at: Optional[float] = None
     #: When the current page was first seen without a title (still loading).
     untitled_since: Optional[float] = None
+    #: Phase "clear": when the port-less browser opened, and since when its
+    #: title has said the page settled.
+    clear_started = 0.0
+    settled_since: Optional[float] = None
 
     def open_session(for_phase: str) -> BrowserSession:
-        new = BrowserSession(profile, park_visible=site.park_visible)
+        new = BrowserSession(profile, park_visible=site.park_visible or for_phase == "clear")
         new.start(
             # The reading browser is infrastructure, not something to look at:
-            # always hidden, whatever triggered the connect. Only the sign-in
-            # window is meant to be on screen.
-            minimized=for_phase == "read",
-            landing=site.usage_url if for_phase == "read" else site.login_url,
+            # always hidden, whatever triggered the connect. So is the
+            # port-less one that clears a bot check. Only the sign-in window
+            # is meant to be on screen.
+            minimized=for_phase != "login",
+            landing=site.login_url if for_phase == "login" else site.usage_url,
             debug=for_phase == "read",
+            offscreen=for_phase == "clear",
         )
-        if for_phase == "read":
+        if for_phase != "login":
             new.hide()
         return new
 
@@ -336,6 +381,11 @@ def run(
                     # The user closed the sign-in window themselves; treat it
                     # the same as pressing the button.
                     phase = "read" if marker.is_file() else "login"
+                elif session is not None and phase == "clear":
+                    # The user closed the check window themselves. Go back to
+                    # reading rather than reopening it: the reader says soon
+                    # enough whether the check is still there.
+                    phase = "read"
                 try:
                     session = open_session(phase)
                 except BrowserError as error:
@@ -343,8 +393,15 @@ def run(
                     final_reported = True
                     return
                 state = ""
-                watch = ChallengeWatch()
+                if phase == "login":
+                    # A new sign-in starts the count over; a reader reopened
+                    # after "clear" does not, or a check that keeps coming
+                    # back would never be called stuck.
+                    watch = ChallengeWatch()
                 revealed_at = untitled_since = None
+                if phase == "clear":
+                    clear_started = time.monotonic()
+                    settled_since = None
 
             show = int(instruction.get("show") or 0)
             if show > seen_show:
@@ -356,7 +413,7 @@ def run(
                     session = None
                     phase = "login"
                     continue
-                if phase == "read":
+                if phase in ("read", "clear"):
                     reveal()
                 else:
                     session.bring_to_front()
@@ -374,6 +431,32 @@ def run(
                     session = None
                     phase = "read"
                     last_poll = 0.0
+                time.sleep(0.5)
+                continue
+
+            # -- clear phase: a port-less browser gets through the check ---
+            if phase == "clear":
+                now = time.monotonic()
+                session.keep_hidden()
+                verdict = title_state(site, session.frame_title())
+                if verdict == "settled":
+                    settled_since = settled_since or now
+                    if now - settled_since >= CLEAR_SETTLE_SECONDS:
+                        # Past the check. Close it cleanly so the cookie it
+                        # earned is written, then read again.
+                        watch.gone()
+                        session.close()
+                        session = None
+                        phase = "read"
+                        last_poll = 0.0
+                        last_reload = time.monotonic()
+                        continue
+                else:
+                    settled_since = None
+                if watch.stuck(now, revealed_at):
+                    set_state("verify_stuck", "BotCheckLoop")
+                elif now - clear_started >= CLEAR_ASK_AFTER_SECONDS:
+                    set_state("verify_required", "BotCheck")
                 time.sleep(0.5)
                 continue
 
@@ -439,6 +522,18 @@ def run(
             except ChallengePending:
                 failures = 0
                 watch.seen(now)
+                if (
+                    site.settled_title
+                    and revealed_at is None
+                    and now - watch.since >= CLEAR_AFTER_SECONDS
+                    and not watch.stuck(now, revealed_at)
+                ):
+                    # The reader is not let through; a port-less browser is.
+                    # Not while the user has the window open to tick it.
+                    session.close()
+                    session = None
+                    phase = "clear"
+                    continue
                 # Give the check a chance to clear by itself before involving
                 # the user, then only say so on the card. The window stays
                 # hidden: a browser that pops up uninvited is worse than a
